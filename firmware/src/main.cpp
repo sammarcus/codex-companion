@@ -21,11 +21,16 @@
 //
 // With no host attached the device runs an ambient screen instead of looking
 // idle or asleep. See firmware/AMBIENT.md.
+//
+// The thing on the panel is a face: a pair of drawn eyes that blink, glance
+// around and change expression per state. See firmware/EYES.md for the
+// geometry, the blink timing model and the composition in both modes.
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_mac.h>
+#include <esp_random.h>
 #include <math.h>
 
 #include "LGFX_TDisplayS3.hpp"
@@ -88,16 +93,45 @@ static inline bool haveUnitName() { return activeName() != nullptr; }
 static constexpr const char* PRODUCT_NAME = "codex companion";
 
 // ---------------------------------------------------------------------------
-// Geometry (design-spec 2.1), landscape 320x170
+// Geometry, landscape 320x170
+//
+// design-spec 2.1 put a single 52px-radius ring in the middle of the panel.
+// The face takes that spot now, so live mode splits the top band in two: the
+// eyes on the left, a smaller ring on the right carrying exactly the same
+// metrics it always did. The two text lines keep their y datums and stay
+// centred on the whole panel, under both. Ambient mode has no ring at all and
+// centres a larger face instead. See firmware/EYES.md part 4.
 // ---------------------------------------------------------------------------
 static constexpr int SCREEN_W = 320;
 static constexpr int SCREEN_H = 170;
-static constexpr int RING_CX  = 160;
-static constexpr int RING_CY  = 68;
-static constexpr int RING_R_OUT = 52;
-static constexpr int RING_R_IN  = 42;
+// Ring, live mode only. Was (160, 68) r 42..52; moved right and shrunk by 6px
+// of radius to clear the face. Every renderLive stroke-width expression is
+// relative to RING_R_OUT, so they all followed the shrink unchanged.
+static constexpr int RING_CX  = 244;
+static constexpr int RING_CY  = 60;
+static constexpr int RING_R_OUT = 46;
+static constexpr int RING_R_IN  = 37;
 static constexpr int LABEL_Y  = 122;   // datum: top-centre
 static constexpr int SUB_Y    = 146;   // datum: top-centre
+
+// Face. One eye is a rounded rect EYE_W x EYE_H; the pair straddles FACE_CX
+// with EYE_GAP of black between them, so the pair is 2*EYE_W + EYE_GAP wide.
+//
+// Ambient: 2*56 + 36 = 148px wide, x 86..234, y 30..94 at rest. The label line
+// starts at y=122, so a fully open eye clears it by 28px and the widest
+// expression (waiting, 1.25x height) still clears it by 20px.
+static constexpr int FACE_CX_AMB  = 160;
+static constexpr int FACE_CY_AMB  = 62;
+static constexpr int EYE_W_AMB    = 56;
+static constexpr int EYE_H_AMB    = 64;
+static constexpr int EYE_GAP_AMB  = 36;
+// Live: 2*40 + 26 = 106px wide, x 43..149. The ring's left edge is at
+// 244 - 46 = 198, so there are 49px of black between the face and the ring.
+static constexpr int FACE_CX_LIVE = 96;
+static constexpr int FACE_CY_LIVE = 60;
+static constexpr int EYE_W_LIVE   = 40;
+static constexpr int EYE_H_LIVE   = 48;
+static constexpr int EYE_GAP_LIVE = 26;
 
 // ---------------------------------------------------------------------------
 // Palette (design-spec 2.3), RGB565
@@ -132,7 +166,6 @@ static constexpr uint32_t STALE_DIM_MS      = 30000;   // 30s no data -> dim
 static constexpr uint32_t AMBIENT_AFTER_MS  = 300000;
 static constexpr uint32_t AMBIENT_BRIGHT_MS = 60000;   // then settle a tier down
 static constexpr uint32_t MODE_XFADE_MS     = 700;     // ambient <-> live handoff
-static constexpr uint32_t AMB_SWEEP_MS      = 24000;   // one comet lap
 static constexpr uint32_t AMB_BREATHE_MS    = 6500;    // slow brightness breathe
 static constexpr uint32_t AMB_HUE_MS        = 45000;   // colour drift, 3 stops
 // Burn-in drift. Two mutually prime-ish periods so the composition never
@@ -142,8 +175,6 @@ static constexpr uint32_t AMB_DRIFT_X_MS    = 97000;
 static constexpr uint32_t AMB_DRIFT_Y_MS    = 61000;
 static constexpr float    AMB_DRIFT_AX      = 9.0f;
 static constexpr float    AMB_DRIFT_AY      = 5.0f;
-static constexpr float    AMB_ARC_DEG       = 76.0f;   // comet head + tail
-static constexpr int      AMB_TAIL_SEGS     = 5;
 static constexpr uint32_t IDLE_DIM_MS       = 15000;   // idle held -> dim tier
 static constexpr uint32_t BUSY_PERIOD_MS    = 2400;    // slow breathe
 static constexpr uint32_t IDLE_PERIOD_MS    = 2400;    // low-amplitude breathe
@@ -159,6 +190,43 @@ static constexpr uint32_t DONE_FLASH_MS     = 600;
 static constexpr uint32_t DONE_RISE_MS      = 120;     // flash ramps up first
 static constexpr uint32_t DONE_XFADE_MS     = 150;     // then melts into idle
 static constexpr uint32_t BUTTON_DEBOUNCE_MS = 180;
+
+// Blink. A human blink is asymmetric: the lid drops far faster than it lifts.
+// Equal ramps read as a mechanical shutter, so the close is 70ms and the open
+// 150ms, with a short shut hold between them. At FRAME_MS = 33 the close gets
+// only ~2 frames, which is the point: it should be almost too fast to see.
+static constexpr uint32_t BLINK_CLOSE_MS  = 70;
+static constexpr uint32_t BLINK_SHUT_MS   = 34;
+static constexpr uint32_t BLINK_OPEN_MS   = 150;
+// Gap between the two halves of a double blink, measured from the moment the
+// first one finishes opening.
+static constexpr uint32_t BLINK_REPEAT_MS = 110;
+// Chance in 100 that a blink is a double, and (within that) that it is a
+// triple. A metronome blink is the thing that reads as broken, so the interval
+// below is randomised per blink and the count is randomised too.
+static constexpr uint32_t BLINK_DOUBLE_PCT = 24;
+static constexpr uint32_t BLINK_TRIPLE_PCT = 7;
+// Per-state interval windows, milliseconds between bursts. Resting is 2.6-6.4s
+// (a relaxed human is 3-5s); busy blinks less because it is concentrating;
+// waiting blinks more because it is agitated.
+static constexpr uint32_t BLINK_GAP_MIN      = 2600;
+static constexpr uint32_t BLINK_GAP_MAX      = 6400;
+static constexpr uint32_t BLINK_GAP_BUSY_MIN = 4200;
+static constexpr uint32_t BLINK_GAP_BUSY_MAX = 9000;
+static constexpr uint32_t BLINK_GAP_WAIT_MIN = 1300;
+static constexpr uint32_t BLINK_GAP_WAIT_MAX = 2800;
+
+// Glance: an occasional look away and back, ambient and idle only.
+static constexpr uint32_t GLANCE_GAP_MIN  = 4500;
+static constexpr uint32_t GLANCE_GAP_MAX  = 13000;
+static constexpr uint32_t GLANCE_HOLD_MIN = 700;
+static constexpr uint32_t GLANCE_HOLD_MAX = 1600;
+static constexpr float    GLANCE_AX       = 7.0f;    // px, horizontal
+static constexpr float    GLANCE_AY       = 3.5f;    // px, vertical
+static constexpr float    GLANCE_EASE_MS  = 110.0f;  // smoothing time constant
+
+// How long "done" holds its happy squint before the eyes open again.
+static constexpr uint32_t DONE_HAPPY_MS   = 1600;
 
 // Backlight tiers (design-spec 2.8), 0-255 PWM duty.
 static const uint8_t BRIGHT_LEVELS[] = { 255, 160, 70, 20 };
@@ -239,6 +307,27 @@ static int      gOy = 0;
 // changing the state the host reported. Cleared on the next state change.
 static bool     waitAcked  = false;
 
+// Face. The blink runs as an explicit phase machine rather than a function of
+// the wall clock, because every interval is randomised: a modulo would give
+// exactly the metronome this is trying to avoid.
+enum BlinkPhase : uint8_t {
+  BLINK_REST = 0,   // eyes open, waiting for blinkNextMs
+  BLINK_CLOSING,
+  BLINK_SHUT,
+  BLINK_OPENING,
+};
+static BlinkPhase blinkPhase   = BLINK_REST;
+static uint32_t   blinkPhaseMs = 0;   // when the current phase started
+static uint32_t   blinkNextMs  = 0;   // when the next burst fires
+static uint8_t    blinkLeft    = 0;   // blinks still owed in this burst
+
+// Glance: current offset in px and where it is easing toward.
+static float      glanceX = 0.0f, glanceY = 0.0f;
+static float      glanceTX = 0.0f, glanceTY = 0.0f;
+static uint32_t   glanceNextMs   = 0;  // when to look away
+static uint32_t   glanceReturnMs = 0;  // when to look back, 0 = not looking
+static bool       doneHappyOver  = false;  // "done" squint has already opened
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -293,6 +382,15 @@ static float breatheFromPhase(float phase) {
 static float breathe(uint32_t nowMs, uint32_t period) {
   if (period == 0) return 1.0f;
   return breatheFromPhase((float)(nowMs % period) / (float)period);
+}
+
+// Inclusive uniform integer in [lo, hi]. esp_random() is the hardware RNG; it
+// needs no seeding and, unlike random(), gives every board a different blink
+// rhythm from the first frame. Fourteen units on one table blinking in lockstep
+// would be the single most robot-like thing this device could do.
+static uint32_t randRange(uint32_t lo, uint32_t hi) {
+  if (hi <= lo) return lo;
+  return lo + (uint32_t)(esp_random() % (hi - lo + 1u));
 }
 
 static void copyClamped(char* dst, size_t cap, const char* src) {
@@ -554,6 +652,210 @@ static uint32_t waitPeriodMs(float tps, bool escalated) {
   return p;
 }
 
+// ---------------------------------------------------------------------------
+// The face
+//
+// Two eyes, drawn entirely from primitives: a rounded rect per eye, one
+// smaller rounded rect for the highlight, an arc for the happy squint, a wide
+// line per eyebrow. Nothing here is a bitmap, so the whole face scales between
+// the two modes by changing four numbers and recolours by changing one.
+//
+// Everything the face does is one of five channels: how open the lids are
+// (blink and expression), how wide the eye is, where the pair is looking,
+// whether the whole face has hopped, and what colour it is. Per-state
+// expressions are just different settings of those five, resolved in
+// renderLive and renderAmbient. See firmware/EYES.md.
+// ---------------------------------------------------------------------------
+struct Face {
+  int      cx, cy;         // centre of the pair, before the burn-in drift
+  int      eyeW, eyeH;     // one eye at full open
+  int      gap;            // black between the two eyes
+  float    lid;            // 0 shut, 1 normal, >1 wide
+  float    widthK;         // horizontal squash or stretch
+  float    gazeX, gazeY;   // px, the eyes move, the brows do not
+  float    bounceY;        // px, the whole head, negative is up
+  uint16_t color;
+  bool     happy;          // upward arcs instead of rounded rects
+  bool     brows;
+  float    browTilt;       // 0 level and raised, 1 dropped toward the nose
+};
+
+static void drawOneEye(float ex, float ey, float w, float h, uint16_t color,
+                       bool gloss) {
+  int iw = (int)lroundf(w);
+  int ih = (int)lroundf(h);
+  if (iw < 3) iw = 3;
+  // A shut eye is a 3px lid line, never nothing. A vanished eye reads as a
+  // rendering fault; a line reads as a blink.
+  if (ih < 3) ih = 3;
+  int r = (int)(((iw < ih) ? iw : ih) * 0.42f);
+  if (r < 1) r = 1;
+  int x0 = (int)lroundf(ex) - iw / 2;
+  int y0 = (int)lroundf(ey) - ih / 2;
+  gfx->fillSmoothRoundRect(x0, y0, iw, ih, r, color);
+
+  // One highlight near the top left of each eye. It is what turns two rounded
+  // rects into something that looks wet, and it costs one more fill. Dropped
+  // once the lid is low enough that it would collide with the eye's own edge.
+  if (gloss && ih > 18 && iw > 16) {
+    int gw = (int)(iw * 0.26f);
+    int gh = (int)(ih * 0.20f);
+    if (gw >= 3 && gh >= 3) {
+      gfx->fillSmoothRoundRect(x0 + (int)(iw * 0.17f), y0 + (int)(ih * 0.16f),
+                               gw, gh, gh / 2, mixColor(color, C_TEXT, 0.55f));
+    }
+  }
+}
+
+// The happy squint. fillArc angles are degrees with 0 at 3 o'clock increasing
+// clockwise, so 202..338 is the top of a circle: put that circle's centre
+// below the eye and the visible piece is an upward bow.
+//
+// The chord across +-68 degrees of vertical is 2*r*sin(68) = 1.854*r, so
+// r = w/1.854 makes the bow exactly as wide as the open eye it replaces, and
+// offsetting the centre by 0.6875*r puts the bow's own vertical middle back on
+// the eye's centre line instead of hanging below it.
+static void drawHappyEye(float ex, float ey, float w, uint16_t color) {
+  float rr = w / 1.854f;
+  if (rr < 5.0f) rr = 5.0f;
+  float t = rr * 0.30f;
+  if (t < 3.0f) t = 3.0f;
+  float ay = ey + rr * 0.6875f;
+  gfx->fillArc((int)lroundf(ex), (int)lroundf(ay), (int)lroundf(rr - t),
+               (int)lroundf(rr), 202.0f, 338.0f, color);
+}
+
+// One eyebrow. `side` is -1 for the left eye and +1 for the right, so the
+// tilted end is always the one nearest the nose: level reads as alert, dropped
+// inward reads as "I am still waiting". Brows sit off the nominal eye height,
+// not the animated one, so a blink does not drag them down onto the eye.
+static void drawBrow(float ex, float ey, float w, float nomH, int side,
+                     float tilt, uint16_t color) {
+  float halfW = w * 0.46f;
+  float base  = ey - nomH * 0.86f;
+  float inner = base + 12.0f * clampf(tilt, 0.0f, 1.0f);
+  float y0 = base, y1 = base;
+  if (side < 0) y1 = inner;
+  else          y0 = inner;
+  gfx->drawWideLine((int)lroundf(ex - halfW), (int)lroundf(y0),
+                    (int)lroundf(ex + halfW), (int)lroundf(y1), 2.6f, color);
+}
+
+static void drawFace(const Face& f) {
+  float w = (float)f.eyeW * f.widthK;
+  float h = (float)f.eyeH * f.lid;
+  float dx = (float)(f.eyeW + f.gap) * 0.5f;
+
+  float headX = (float)(f.cx + gOx);
+  float headY = (float)(f.cy + gOy) + f.bounceY;
+  float eyeX  = headX + f.gazeX;
+  float eyeY  = headY + f.gazeY;
+
+  uint16_t col = xf(f.color);
+
+  for (int i = 0; i < 2; ++i) {
+    float side = (i == 0) ? -1.0f : 1.0f;
+    if (f.happy) drawHappyEye(eyeX + side * dx, eyeY, w, col);
+    else drawOneEye(eyeX + side * dx, eyeY, w, h, col, f.lid > 0.55f);
+    if (f.brows) {
+      drawBrow(headX + side * dx, headY, w, (float)f.eyeH, (int)side,
+               f.browTilt, col);
+    }
+  }
+}
+
+// Advance the blink machine and return the lid factor, 0 shut to 1 open.
+// Called exactly once per frame. `gapLo`/`gapHi` are the current state's
+// interval window; passing `allowed` false parks the machine open and rearms
+// it, which is how sleep (already shut) and done (squinting) opt out.
+static float updateBlink(uint32_t nowMs, uint32_t gapLo, uint32_t gapHi,
+                         bool allowed) {
+  if (!allowed) {
+    blinkPhase  = BLINK_REST;
+    blinkLeft   = 0;
+    blinkNextMs = nowMs + randRange(gapLo, gapHi);
+    return 1.0f;
+  }
+
+  switch (blinkPhase) {
+    case BLINK_REST:
+      if ((int32_t)(nowMs - blinkNextMs) >= 0) {
+        // Only roll a new burst length when the previous one is spent, or a
+        // double blink would re-roll itself into an unbounded flutter.
+        if (blinkLeft == 0) {
+          uint32_t roll = esp_random() % 100u;
+          blinkLeft = (roll < BLINK_TRIPLE_PCT)   ? 3
+                      : (roll < BLINK_DOUBLE_PCT) ? 2
+                                                  : 1;
+        }
+        blinkPhase   = BLINK_CLOSING;
+        blinkPhaseMs = nowMs;
+      }
+      return 1.0f;
+
+    case BLINK_CLOSING: {
+      float k = (float)(nowMs - blinkPhaseMs) / (float)BLINK_CLOSE_MS;
+      if (k >= 1.0f) {
+        blinkPhase   = BLINK_SHUT;
+        blinkPhaseMs = nowMs;
+        return 0.0f;
+      }
+      return 1.0f - k * k;          // accelerating: the lid drops
+    }
+
+    case BLINK_SHUT:
+      if (nowMs - blinkPhaseMs >= BLINK_SHUT_MS) {
+        blinkPhase   = BLINK_OPENING;
+        blinkPhaseMs = nowMs;
+      }
+      return 0.0f;
+
+    case BLINK_OPENING: {
+      float k = (float)(nowMs - blinkPhaseMs) / (float)BLINK_OPEN_MS;
+      if (k >= 1.0f) {
+        if (blinkLeft > 0) --blinkLeft;
+        blinkPhase  = BLINK_REST;
+        blinkNextMs = (blinkLeft > 0) ? (nowMs + BLINK_REPEAT_MS)
+                                      : (nowMs + randRange(gapLo, gapHi));
+        return 1.0f;
+      }
+      return sinf(k * (float)M_PI * 0.5f);   // decelerating: the lid lifts
+    }
+  }
+  return 1.0f;
+}
+
+// Look away, hold, look back. Ambient and idle only: a face that glances
+// around while it is meant to be concentrating or demanding an answer reads as
+// distracted rather than alive.
+static void updateGlance(uint32_t nowMs, uint32_t dtMs, bool allowed) {
+  if (!allowed) {
+    glanceTX = glanceTY = 0.0f;
+    glanceReturnMs = 0;
+    glanceNextMs   = nowMs + randRange(GLANCE_GAP_MIN, GLANCE_GAP_MAX);
+  } else if (glanceReturnMs != 0) {
+    if ((int32_t)(nowMs - glanceReturnMs) >= 0) {
+      glanceTX = glanceTY = 0.0f;
+      glanceReturnMs = 0;
+      glanceNextMs   = nowMs + randRange(GLANCE_GAP_MIN, GLANCE_GAP_MAX);
+    }
+  } else if ((int32_t)(nowMs - glanceNextMs) >= 0) {
+    // Never a zero move: the direction is drawn first and the magnitude never
+    // reaches zero, so a scheduled glance always visibly goes somewhere.
+    float dir = (esp_random() & 1u) ? 1.0f : -1.0f;
+    float mag = 0.55f + (float)(esp_random() % 46u) / 100.0f;   // 0.55..1.00
+    glanceTX = GLANCE_AX * mag * dir;
+    glanceTY = GLANCE_AY * ((float)(esp_random() % 3u) - 1.0f) * 0.7f;
+    glanceReturnMs = nowMs + randRange(GLANCE_HOLD_MIN, GLANCE_HOLD_MAX);
+  }
+
+  // Frame-rate independent smoothing, so the eyes slide rather than snap.
+  float k = (float)dtMs / GLANCE_EASE_MS;
+  if (k > 1.0f) k = 1.0f;
+  glanceX += (glanceTX - glanceX) * k;
+  glanceY += (glanceTY - glanceY) * k;
+}
+
 // Widest the centre string may be before it starts landing on the ring stroke.
 // The ring hole is 2 * RING_R_IN across; leave a 4px margin either side.
 static constexpr int CENTER_MAX_W = 2 * RING_R_IN - 8;
@@ -568,13 +870,15 @@ static void drawText(uint32_t nowMs, uint16_t accent, bool showCenter) {
     gfx->setTextColor(scaleColor(C_TEXT, gXfade), C_BG);
     gfx->setFont(&fonts::Font2);
     gfx->setTextSize(1);
-    gfx->drawString(st.label, RING_CX + gOx, LABEL_Y + gOy);
+    // Centred on the panel, not on the ring: the ring moved right to make room
+    // for the face, and the two text lines still belong to the whole screen.
+    gfx->drawString(st.label, SCREEN_W / 2 + gOx, LABEL_Y + gOy);
   }
   if (st.sub[0] != '\0') {
     gfx->setTextColor(scaleColor(C_TEXT_DIM, gXfade), C_BG);
     gfx->setFont(&fonts::Font0);
     gfx->setTextSize(1);
-    gfx->drawString(st.sub, RING_CX + gOx, SUB_Y + gOy);
+    gfx->drawString(st.sub, SCREEN_W / 2 + gOx, SUB_Y + gOy);
   }
   if (showCenter && st.center[0] != '\0') {
     gfx->setTextDatum(textdatum_t::middle_center);
@@ -635,6 +939,29 @@ static void renderLive(uint32_t nowMs, uint32_t dtMs) {
   uint16_t accent = C_IDLE;
   float    level  = 1.0f;
 
+  // The face, filled in by the state below and drawn once at the end. Defaults
+  // are the idle look: open, level, looking straight ahead.
+  Face f;
+  f.cx      = FACE_CX_LIVE;
+  f.cy      = FACE_CY_LIVE;
+  f.eyeW    = EYE_W_LIVE;
+  f.eyeH    = EYE_H_LIVE;
+  f.gap     = EYE_GAP_LIVE;
+  f.lid     = 1.0f;
+  f.widthK  = 1.0f;
+  f.gazeX   = 0.0f;
+  f.gazeY   = 0.0f;
+  f.bounceY = 0.0f;
+  f.color   = C_IDLE;
+  f.happy   = false;
+  f.brows   = false;
+  f.browTilt = 0.0f;
+
+  uint32_t gapLo = BLINK_GAP_MIN, gapHi = BLINK_GAP_MAX;
+  bool blinkOK  = true;
+  bool glanceOK = false;
+  float lidScale = 1.0f;      // expression, multiplied by the blink factor
+
   switch (eff) {
     case ST_SLEEP: {
       // Dim, slow full-ring breathe: 15% -> 45% -> 15%.
@@ -643,6 +970,19 @@ static void renderLive(uint32_t nowMs, uint32_t dtMs) {
       accent = C_SLEEP;
       drawRing(1.0f, scaleColor(accent, level), RING_R_IN, RING_R_OUT,
                scaleColor(C_TRACK, 0.4f));
+      // Shut, and breathing. The lid line rides 3px up and down on the same 4s
+      // sine as the ring and the eye narrows slightly at the bottom of it.
+      // That is the whole animation: a sleeping thing should be almost still,
+      // but a genuinely frozen panel is indistinguishable from a crashed one.
+      blinkOK  = false;
+      lidScale = 0.0f;
+      f.widthK = 0.90f + 0.06f * b;
+      f.gazeY  = -1.6f + 3.2f * b;
+      // C_SLEEP is #26314A, which at the sleep backlight tier is very close to
+      // invisible. The lid is lifted toward the text colour so a closed eye
+      // still reads as a closed eye rather than as a blank screen.
+      f.color  = scaleColor(mixColor(C_SLEEP, C_TEXT, 0.42f),
+                            0.45f + 0.35f * b);
       break;
     }
     case ST_IDLE: {
@@ -655,6 +995,9 @@ static void renderLive(uint32_t nowMs, uint32_t dtMs) {
       accent = C_IDLE;
       drawRing(st.ring, scaleColor(C_IDLE, 0.75f + 0.25f * b), RING_R_IN,
                RING_R_OUT, C_TRACK);
+      // Open, blinking at the resting rate, and looking around now and then.
+      f.color  = scaleColor(C_IDLE, 0.80f + 0.20f * b);
+      glanceOK = true;
       break;
     }
     case ST_BUSY: {
@@ -665,6 +1008,18 @@ static void renderLive(uint32_t nowMs, uint32_t dtMs) {
       int rIn = RING_R_OUT - (int)(10.0f + 3.0f * b);
       if (rIn < 0) rIn = 0;
       drawRing(st.ring, scaleColor(accent, level), rIn, RING_R_OUT, C_TRACK);
+      // Concentrating: lids down to a squint, and the gaze tracks back and
+      // forth across something only it can see. The two scan periods do not
+      // divide into each other, so the eyes never retrace one fixed path and
+      // the motion does not read as a mechanism.
+      lidScale = 0.60f;
+      f.gazeX  = 6.5f * sinf((float)(nowMs % 1700u) / 1700.0f * 2.0f *
+                             (float)M_PI);
+      f.gazeY  = 2.0f * sinf((float)(nowMs % 2600u) / 2600.0f * 2.0f *
+                             (float)M_PI);
+      f.color  = scaleColor(C_BUSY, 0.70f + 0.30f * b);
+      gapLo    = BLINK_GAP_BUSY_MIN;
+      gapHi    = BLINK_GAP_BUSY_MAX;
       break;
     }
     case ST_WAITING: {
@@ -679,6 +1034,10 @@ static void renderLive(uint32_t nowMs, uint32_t dtMs) {
         level     = 0.62f;
         drawRing(st.ring, scaleColor(accent, level), RING_R_IN, RING_R_OUT,
                  scaleColor(C_TRACK, 0.5f));
+        // Still wide, because a prompt is still pending, but level-browed and
+        // steady. This is the face of something that has been told you know.
+        lidScale = 1.10f;
+        f.color  = scaleColor(C_WAIT, 0.78f);
         break;
       }
       // Amber pulse; faster with tps, escalates to red after 10s.
@@ -700,6 +1059,26 @@ static void renderLive(uint32_t nowMs, uint32_t dtMs) {
       // the waiting signal on their own.
       drawRing(st.ring, scaleColor(accent, level), rIn, RING_R_OUT,
                scaleColor(C_TRACK, 0.5f));
+
+      // The hero state. Everything here is aimed at one job: reading as
+      // "hey, you" from across a room, where the text is illegible and the
+      // ring is a small amber dot.
+      //   - eyes wide, wider still once escalated
+      //   - eyebrows up, and dropped toward the nose once escalated
+      //   - the whole head hops a few px on every pulse peak, which is the
+      //     part that catches peripheral vision, since motion does and a
+      //     brightness change on a 40px object mostly does not
+      //   - blinking twice as often as at rest, which reads as agitation
+      // The gaze stays locked forward: a face that looks away while demanding
+      // an answer stops demanding it.
+      lidScale   = escalated ? 1.28f : 1.18f;
+      f.widthK   = escalated ? 1.06f : 1.00f;
+      f.bounceY  = -(escalated ? 5.0f : 3.0f) * b;
+      f.color    = scaleColor(accent, 0.45f + 0.55f * b);
+      f.brows    = true;
+      f.browTilt = escalated ? 1.0f : 0.0f;
+      gapLo      = BLINK_GAP_WAIT_MIN;
+      gapHi      = BLINK_GAP_WAIT_MAX;
       break;
     }
     case ST_DONE: {
@@ -736,9 +1115,40 @@ static void renderLive(uint32_t nowMs, uint32_t dtMs) {
         accent = C_IDLE;
         drawRing(st.ring, accent, RING_R_IN, RING_R_OUT, C_TRACK);
       }
+
+      // The face holds a happy squint for a full DONE_HAPPY_MS, well past the
+      // 600ms ring flash, because a smile that lasts exactly as long as a
+      // flash does not register as a smile. It hops once on arrival.
+      if (since < DONE_HAPPY_MS) {
+        blinkOK = false;
+        f.happy = true;
+        f.color = C_DONE;
+        if (since < 300) {
+          f.bounceY = -4.0f * (1.0f - (float)since / 300.0f);
+        }
+        doneHappyOver = false;
+      } else if (!doneHappyOver) {
+        // Coming out of the squint. Handing the machine a half-finished open
+        // makes the eyes lift out of the smile instead of cutting to open,
+        // which is exactly what a face does after it stops grinning.
+        doneHappyOver = true;
+        blinkPhase    = BLINK_OPENING;
+        blinkPhaseMs  = nowMs;
+        blinkLeft     = 0;
+      }
       break;
     }
   }
+
+  // One blink update and one glance update per frame, after the state has
+  // chosen its windows. The expression's own lid factor multiplies the blink's
+  // rather than replacing it, so a squinting busy face still blinks.
+  float blinkLid = updateBlink(nowMs, gapLo, gapHi, blinkOK);
+  updateGlance(nowMs, dtMs, glanceOK);
+  f.lid    = lidScale * blinkLid;
+  f.gazeX += glanceX;
+  f.gazeY += glanceY;
+  drawFace(f);
 
   drawText(nowMs, accent, true);
   lastAccent = accent;
@@ -766,31 +1176,40 @@ static uint16_t ambientAccent(uint32_t nowMs) {
   return mixColor(stops[seg], stops[(seg + 1) % 3], p - (float)seg);
 }
 
-static void renderAmbient(uint32_t nowMs) {
-  const int cx = RING_CX + gOx;
-  const int cy = RING_CY + gOy;
-
+static void renderAmbient(uint32_t nowMs, uint32_t dtMs) {
   uint16_t accent = ambientAccent(nowMs);
-  float    level  = 0.45f + 0.45f * breathe(nowMs, AMB_BREATHE_MS);
+  float    level  = 0.55f + 0.40f * breathe(nowMs, AMB_BREATHE_MS);
 
-  // Faint full track so the ring reads as a ring, not a lone floating arc.
-  gfx->fillArc(cx, cy, RING_R_IN, RING_R_OUT, 0.0f, 360.0f,
-               xf(scaleColor(C_TRACK, 0.7f)));
+  // The comet ring used to live here. It is gone from ambient: the face is
+  // 148px wide and the ring was 104px across in the same place, and shrinking
+  // either one to fit made both worse. The ring is not lost, it just belongs
+  // to live mode now, where it carries real numbers. Everything the comet was
+  // here to do (never a still frame, no error message, no dead-looking object)
+  // the face does better, because the motion means something.
+  Face f;
+  f.cx      = FACE_CX_AMB;
+  f.cy      = FACE_CY_AMB;
+  f.eyeW    = EYE_W_AMB;
+  f.eyeH    = EYE_H_AMB;
+  f.gap     = EYE_GAP_AMB;
+  f.widthK  = 1.0f;
+  f.bounceY = 0.0f;
+  f.happy   = false;
+  f.brows   = false;
+  f.browTilt = 0.0f;
+  f.color   = scaleColor(accent, level);
 
-  // Comet: a head plus a tail of dimmer segments, one lap per AMB_SWEEP_MS.
-  // At 24s a lap that is about 15 degrees per second, slow enough to read as
-  // drifting rather than spinning.
-  float head = ARC_START +
-               360.0f * ((float)(nowMs % AMB_SWEEP_MS) / (float)AMB_SWEEP_MS);
-  float seg  = AMB_ARC_DEG / (float)AMB_TAIL_SEGS;
-  for (int i = 0; i < AMB_TAIL_SEGS; ++i) {
-    float k = level * (1.0f - 0.19f * (float)i);
-    // Half a degree of overlap: adjacent fillArc calls otherwise leave a
-    // visible hairline of track colour between segments.
-    gfx->fillArc(cx, cy, RING_R_IN, RING_R_OUT,
-                 head - seg * (float)(i + 1) - 0.5f, head - seg * (float)i,
-                 xf(scaleColor(accent, k)));
-  }
+  float blinkLid = updateBlink(nowMs, BLINK_GAP_MIN, BLINK_GAP_MAX, true);
+  updateGlance(nowMs, dtMs, true);
+  // A 5% height swell on the same 6.5s period as the brightness breathe. Two
+  // eyes holding exactly one shape between blinks look painted on; this is
+  // invisible as motion and is the whole difference between resting and inert.
+  // It also keeps smearing the eyes' top and bottom edges, which is the half
+  // of the burn-in defence the drift does not cover for a big solid shape.
+  f.lid   = blinkLid * (0.97f + 0.05f * breathe(nowMs, AMB_BREATHE_MS));
+  f.gazeX = glanceX;
+  f.gazeY = glanceY;
+  drawFace(f);
 
   // Text. The owner name is the headline when there is one; otherwise the
   // product name takes the top line and the unit id sits below it. Nothing
@@ -806,12 +1225,12 @@ static void renderAmbient(uint32_t nowMs) {
   gfx->setFont(&fonts::Font2);
   const char* owner = activeName();
   gfx->drawString(owner ? owner : PRODUCT_NAME,
-                  RING_CX + gOx, LABEL_Y + gOy);
+                  SCREEN_W / 2 + gOx, LABEL_Y + gOy);
 
   gfx->setTextColor(scaleColor(C_TEXT_DIM, gXfade), C_BG);
   gfx->setFont(&fonts::Font0);
   gfx->drawString(owner ? PRODUCT_NAME : unit,
-                  RING_CX + gOx, SUB_Y + gOy);
+                  SCREEN_W / 2 + gOx, SUB_Y + gOy);
 
   lastAccent = accent;
 }
@@ -856,10 +1275,35 @@ static void renderFrame(uint32_t nowMs) {
   gOx = (int)lroundf(AMB_DRIFT_AX * px * driftK);
   gOy = (int)lroundf(AMB_DRIFT_AY * py * driftK);
 
+#ifdef FPS_DEBUG
+  uint32_t t0 = micros();
+#endif
+
   gfx->fillScreen(C_BG);
-  if (ambientMode) renderAmbient(nowMs);
+  if (ambientMode) renderAmbient(nowMs, dtMs);
   else             renderLive(nowMs, dtMs);
   if (fbReady) fb.pushSprite(0, 0);
+
+#ifdef FPS_DEBUG
+  // Build with PLATFORMIO_BUILD_FLAGS=-DFPS_DEBUG to get a frame-cost line on
+  // the same USB CDC the protocol uses. Never enabled on a fleet image: the
+  // protocol channel has to stay clean. See firmware/EYES.md part 6.
+  static uint32_t fpsWindowMs = 0, fpsFrames = 0, fpsSumUs = 0, fpsMaxUs = 0;
+  uint32_t dus = micros() - t0;
+  ++fpsFrames;
+  fpsSumUs += dus;
+  if (dus > fpsMaxUs) fpsMaxUs = dus;
+  if (fpsWindowMs == 0) fpsWindowMs = nowMs;
+  if (nowMs - fpsWindowMs >= 3000) {
+    Serial.printf("fps: mode=%s frames=%lu fps=%.1f avg_ms=%.2f max_ms=%.2f\n",
+                  ambientMode ? "ambient" : "live", (unsigned long)fpsFrames,
+                  1000.0f * (float)fpsFrames / (float)(nowMs - fpsWindowMs),
+                  (float)fpsSumUs / (float)fpsFrames / 1000.0f,
+                  (float)fpsMaxUs / 1000.0f);
+    fpsWindowMs = nowMs;
+    fpsFrames = 0; fpsSumUs = 0; fpsMaxUs = 0;
+  }
+#endif
 }
 
 static void drawBootScreen() {
@@ -1080,6 +1524,14 @@ void setup() {
   lastFrameMs     = millis();
   lastButtonLevel  = digitalRead(PIN_BUTTON_1) != 0;
   lastButton2Level = digitalRead(PIN_BUTTON_2) != 0;
+
+  // Arm the face. Both schedules are randomised from the first frame, so two
+  // units side by side on the same desk do not blink together.
+  blinkPhase     = BLINK_REST;
+  blinkLeft      = 0;
+  blinkNextMs    = millis() + randRange(BLINK_GAP_MIN, BLINK_GAP_MAX);
+  glanceNextMs   = millis() + randRange(GLANCE_GAP_MIN, GLANCE_GAP_MAX);
+  glanceReturnMs = 0;
 
   // Hand the boot screen over to ambient with the same cross-fade the device
   // uses between modes, so the first thing after the wordmark is a fade rather

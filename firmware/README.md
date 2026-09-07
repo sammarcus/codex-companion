@@ -2,7 +2,8 @@
 
 Firmware for the Codex Desk Companion: a LILYGO T-Display-S3 (ESP32-S3, 16MB
 flash, 8MB PSRAM, ST7789 170x320 8-bit parallel, native USB CDC) that shows a
-live OpenAI Codex CLI session as a colour ring plus centre text.
+live OpenAI Codex CLI session as a pair of blinking eyes plus a colour ring
+and centre text.
 
 No WiFi, no accounts, no pairing. An optional Node host helper
 (`../helper/codex-companion.js`, one file, no dependencies) streams
@@ -17,9 +18,10 @@ runs ambient mode forever.
 |---|---|
 | `platformio.ini` | PlatformIO project, env `tdisplays3` |
 | `src/LGFX_TDisplayS3.hpp` | LovyanGFX device config (Bus_Parallel8 + Panel_ST7789 + Light_PWM) |
-| `src/main.cpp` | protocol parser, state machine, ring renderer |
+| `src/main.cpp` | protocol parser, state machine, face and ring renderer |
 | `tools/sim.py` | streams a demo protocol sequence at a board over serial |
 | `tools/flash-all.sh` | flashes units 1..14, every one from the byte-identical image |
+| `EYES.md` | the face: geometry, blink timing model, per-state expressions, composition |
 | `AMBIENT.md` | ambient mode, owner name, button behaviour |
 
 Pins, panel offsets and invert flags all come from `../docs/hardware-recon.md`,
@@ -231,7 +233,7 @@ device keeps its previous value, so a delta line is legal:
 |---|---|---|
 | `state` | string | `sleep` / `idle` / `busy` / `waiting` / `done`. Any other value makes the whole line malformed: it is dropped silently, with no `ok`. |
 | `ring` | number | ring fill, clamped to 0..1 |
-| `center` | string | big text inside the ring, buffer clamped to 15 chars. Whatever will not fit the ring's 76px inner hole steps down a font size and is then truncated, so plan on roughly 4 chars at the large face and ~9 at the small one. |
+| `center` | string | big text inside the ring, buffer clamped to 15 chars. Whatever will not fit the ring's 66px inner hole steps down a font size and is then truncated, so plan on roughly 4 chars at the large face and ~9 at the small one. |
 | `label` | string | small text above the sub line, clamped to 23 chars |
 | `sub` | string | smallest line at the bottom, clamped to 39 chars |
 | `tps` | number | tokens/sec, clamped to 0..10000; shortens the `waiting` pulse |
@@ -260,13 +262,19 @@ rely on the fact that the helper's own 2000ms keepalive keeps flushing them.
 
 ## Behaviour
 
-| State | Ring |
-|---|---|
-| `idle` | ring shows the reported fill, with a low-amplitude 2400ms brightness breathe so a live unit never looks frozen |
-| `busy` | slow breathe, 2400ms sine, amber; ring shows the reported fill |
-| `waiting` | amber pulse on the reported fill; period shortens as `tps` rises (900ms down to 700ms), then flips to red and halves at 10s. Button 1 acknowledges it: steady amber, no pulse, no escalation, until the next state change |
-| `done` | green flash, 600ms: ramps up over 120ms, decays, then cross-fades into the idle look over the last 150ms. Armed only on the transition into `done`, so a repeated `done` line is a keepalive and does not replay the flash |
-| `sleep` | dim slow breathe, 4000ms, full ring |
+Live mode draws a face on the left and the ring on the right, with the label
+and sub lines centred under both. Every state moves both.
+
+| State | Ring | Face |
+|---|---|---|
+| `idle` | ring shows the reported fill, with a low-amplitude 2400ms brightness breathe so a live unit never looks frozen | open, blinking at the resting rate, glancing around now and then |
+| `busy` | slow breathe, 2400ms sine, amber; ring shows the reported fill | lids down to a concentrating squint, gaze tracking back and forth, blinking less |
+| `waiting` | amber pulse on the reported fill; period shortens as `tps` rises (900ms down to 700ms), then flips to red and halves at 10s. Button 1 acknowledges it: steady amber, no pulse, no escalation, until the next state change | eyes wide, eyebrows up, head hopping on every pulse peak, blinking roughly twice as often. Escalation widens the eyes further and drops the brows toward the nose. An acknowledgement keeps the wide eyes but stops the hop and levels the brows |
+| `done` | green flash, 600ms: ramps up over 120ms, decays, then cross-fades into the idle look over the last 150ms. Armed only on the transition into `done`, so a repeated `done` line is a keepalive and does not replay the flash | a happy squint held 1600ms, hopping once on arrival, then the eyes lift back open |
+| `sleep` | dim slow breathe, 4000ms, full ring | shut, the lid line breathing on the same 4000ms sine |
+
+Full detail, including the blink timing model and the measured frame cost of
+all of it, is in `EYES.md`.
 
 All five of those are the **live** view, which the device shows only while a
 host is actually talking to it. With no host it runs ambient mode instead; see

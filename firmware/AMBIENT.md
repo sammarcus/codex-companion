@@ -30,37 +30,56 @@ unit looked like permanently, which is the thing this change exists to fix.
 
 ### What it draws
 
-Composition, all of it moving, none of it an error message:
+A face. Composition, all of it moving, none of it an error message:
 
-- A faint full ring track at 70% of `C_TRACK`, so the shape still reads as a
-  ring rather than a lone floating arc.
-- A comet: five arc segments totalling 76 degrees, each one 19% dimmer than the
-  one ahead of it, drawn with half a degree of overlap so no hairline of track
-  colour shows between them. It makes one lap every 24 seconds, about 15
-  degrees per second, which reads as drifting rather than spinning.
-- A brightness breathe over the whole comet, 6500ms, sine, 45% to 90%.
+- Two eyes centred at (160, 62), each a 56 x 64 rounded rect with 36px of black
+  between them, drawn from primitives. They blink on a randomised interval,
+  glance around now and then, and swell 5% in height on a slow breathe. Full
+  geometry, the blink timing model and the per-state expressions are in
+  `firmware/EYES.md`.
+- A brightness breathe over the whole face, 6500ms, sine, 55% to 95%.
 - A colour drift over 45 seconds through three stops: `C_IDLE` (#3AA0FF),
   `C_AMB_TEAL` (#2ED3C6), `C_BOOT` (#5B8CFF), then back. Two of those are
   design-spec 2.3 blues. The teal is new: design-spec has no "no host attached"
   state, so there was nothing in its table to borrow, and without a third stop
   the drift reads as one flat blue for 45 seconds.
-- Two text lines under the ring. With a name set: the owner's name on the
+- Two text lines under the face. With a name set: the owner's name on the
   label line in Font2, the product name below it in Font0. Without one: the
   product name on the label line, the unit id below it.
 
-There is deliberately no centre text, no "waiting for host", no error, and no
-still frame. The comet keeps moving even at the trough of the breathe.
+There is deliberately no "waiting for host", no error, and no still frame. The
+eyes keep moving even at the trough of the breathe.
+
+### What used to be here
+
+Ambient used to draw a comet: a faint full ring track plus five arc segments
+totalling 76 degrees, each 19% dimmer than the one ahead of it, making a lap
+every 24 seconds. That is gone from ambient.
+
+The face is 148px wide and the comet was 104px across in the same place.
+Shrinking either one to fit made both worse, and a ring drawn around a face is
+a bullseye rather than a portrait. The ring itself is not lost: it belongs to
+live mode now, where it carries real numbers, and everything the comet was here
+to do (never a still frame, no error message, no dead-looking object) the face
+does better, because its motion means something.
 
 ### Burn-in
 
 Two things guard against it.
 
-- **Drift.** The entire composition, ring and both text lines, rides a
+- **Drift.** The entire composition, face and both text lines, rides a
   two-axis sine: 9px amplitude on a 97s period horizontally, 5px on a 61s
   period vertically. The periods do not divide into each other, so the path
   does not retrace itself, and every text edge is smeared across several pixels
   within a couple of minutes. `gOx`/`gOy` are applied by `drawRing`,
-  `drawText`, and the ambient renderer alike.
+  `drawFace`, `drawText`, and the ambient renderer alike.
+- **The blink.** The face is a bigger, more solid shape than the comet was, so
+  the drift is doing more work than it used to. The blink is the other half:
+  it collapses each eye from 64px tall to a 3px lid line several times a
+  minute, which smears the horizontal edges far harder than the 5px vertical
+  drift ever did, and the 5% height breathe keeps them moving in between. The
+  drift amplitudes did not change, so the 24-character name cap below, which is
+  arithmetic from `AMB_DRIFT_AX = 9`, still holds.
 - **Dimming.** Ambient holds the full backlight tier for its first 60 seconds
   (`AMBIENT_BRIGHT_MS`), so a freshly plugged-in unit looks like it is showing
   you something, then settles to the dim tier (duty 70) for as long as it stays
@@ -296,13 +315,15 @@ panel.
 
 Ambient:
 
-- [ ] The comet reads as calm and pleasant, not as a loading spinner or a
-      fault indicator. 24s per lap is a guess at "calm"; it may want to be
-      slower.
+- [ ] The face reads as calm and pleasant, and as cute rather than as a
+      surveillance camera. This is the whole point of the object.
+- [ ] The blink looks organic, not mechanical. Watch a full minute: the close
+      should be almost too fast to see and the open should feel soft.
+- [ ] The occasional double blink lands as charm, not as a glitch.
+- [ ] The glance reads as the eyes looking at something, not as the whole
+      picture sliding sideways.
 - [ ] The colour drift is perceptible over 45s without being distracting, and
       the teal stop does not look out of family with the two blues.
-- [ ] The five comet segments read as one object with a tail, with no visible
-      seams between the arcs.
 - [ ] The owner name is legible at desk distance in Font2, and a long name
       (say 20 characters) does not run off the 320px panel. Nothing truncates
       the ambient name in firmware.
