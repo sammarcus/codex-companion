@@ -1,14 +1,12 @@
-# Printed QR card text
+# Printed card text
 
-Text for the small card that ships in the box with each unit. Two sides,
-front and back. Render the QR itself with `docs/make-qr.sh` (see bottom of
-this file).
+Copy for the small card that goes in each box. Two sides. Everything in
+`[SQUARE BRACKETS]` is a placeholder to fill in before printing.
 
-Everything in brackets is a placeholder to fill in before printing.
-Everything else is confirmed against `helper/package.json` and
-`helper/src/install.js`, both of which exist and were read directly, this
-card no longer carries the "package name/CLI verbs not yet decided"
-hedging an earlier draft had, since that got settled by the actual build.
+This is a gift, not a manual. The card's whole job is: say what the object is,
+make clear it already works, and mention the optional extra without turning
+the thing into homework. Keep it short enough to read while holding the unit
+in the other hand.
 
 ---
 
@@ -17,11 +15,11 @@ hedging an earlier draft had, since that got settled by the actual build.
 ```
 Codex Desk Companion
 
-Shows your live Codex CLI session at a glance.
+A small screen that shows what your coding
+session is doing, from across the room.
 ```
 
-Design note (not printed copy): keep the front to just those two lines.
-This is a status object on a desk, not a poster, the second line should
+Design note, not printed copy: the front stays at those two lines. It should
 read in under two seconds.
 
 ---
@@ -29,105 +27,111 @@ read in under two seconds.
 ## Back
 
 ```
-Set up (one time):
+It already works.
 
-    npm install -g ./codex-companion-1.0.0.tgz
-    codex-companion install
+Plug it into any USB port, any charger, any battery.
+No app, no account, no WiFi, no setup. It lights up and
+stays lit, and that is the whole object. If you never
+read the rest of this card, nothing is missing.
 
-Plug the unit into a USB port on this Mac first, then run those two
-commands in a terminal, from the folder holding the .tgz file that came
-with the unit. It survives reboots, you won't need to run it again.
 
-To remove:
+Put your name on it
 
-    codex-companion uninstall
+    ls /dev/cu.usbmodem*
+    printf '{"name":"Your Name"}\n' > /dev/cu.usbmodem101
 
-Questions or something's broken? sam.marcus@me.com
+Use whichever path the first command printed. Up to 24
+letters. It remembers, through unplugging and through
+anything I do to it later.
+
+
+Optional: make it show your live Codex session
+
+There is one file at [URL]. Download it, run it, and the
+screen starts showing what your session is doing: a ring
+for how full your context window is, and a colour for
+what is happening. The one worth having is the amber
+pulse, which means your agent is waiting on you.
+
+It is a single file with no dependencies. It installs
+nothing and downloads nothing. It cannot approve or deny
+anything on your behalf, ever: approvals still appear in
+your terminal and you still answer them yourself.
+
+    node codex-companion.js doctor     # look first
+    node codex-companion.js            # run it, Ctrl-C stops it
+
+What it does not do: no network of any kind, no
+background service, nothing that starts itself, and it
+never reads your prompts, your code, or your output.
+
+
+Anything at all: [CONTACT]
 ```
-
-Notes on the back copy, for whoever finalizes this before printing:
-
-- **The printed command is the offline tarball install, deliberately, not
-  `npx`.** `npm view codex-companion` returned a registry **404** on
-  2026-09-07 (`404 Not Found - GET
-  https://registry.npmjs.org/codex-companion`), and `helper/README.md`
-  says the same thing in plain words: the package is not on the public
-  registry, so `npx codex-companion` cannot resolve it. An earlier draft
-  of this card printed `npx codex-companion install`, which would have put
-  a guaranteed-to-404 command on 14 physical cards. `npm install -g
-  ./codex-companion-1.0.0.tgz` works today with no network at all, which
-  is also the point of this project. The `1.0.0` in the filename is
-  `helper/package.json`'s `"version"`; `npm pack` from `helper/` produces
-  exactly that filename. Ship the tarball alongside the unit (or on the
-  same USB stick), since the card's command assumes the file is in the
-  current directory.
-- **`codex-companion` is the confirmed, real npm package name.**
-  `helper/package.json`'s `"name"` field and `"bin": {"codex-companion":
-  "bin/codex-companion.js"}` both read `codex-companion` directly, and
-  `docs/host-tooling-recon.md` section 1 independently confirmed that name
-  free on the npm registry with no prior-publish history (unlike this
-  repo's own directory name, `codex-buddy`, which came back risky). If
-  someone does run `npm publish` under this name before cards are printed,
-  and `npm view codex-companion` then returns a version rather than a 404,
-  the card and `docs/make-qr.sh` can be switched back to the shorter `npx
-  codex-companion install`. Until that check passes, they stay on the
-  tarball path.
-- **`install` and `uninstall` are the real, confirmed subcommands.**
-  `helper/src/install.js`'s `main()` switches on exactly these two names
-  (plus `run`, `status`, `doctor`, `demo`, `help`), read directly from
-  source. Bare `codex-companion` (no subcommand) also works, it
-  defaults to `install` followed immediately by `run` in the foreground
-  (`install.js`, the `case 'default'` branch), but the explicit `install`
-  form is clearer for a printed card aimed at someone who has never seen
-  this tool before.
-- Install copies the package into a **stable, persistent** directory,
-  `~/.codex-companion/app` (`installDir()`, `install.js:31-33`), not an
-  `npx` on-demand cache path, and on macOS registers a launchd LaunchAgent
-  from `helper/templates/com.codex-companion.plist` with `KeepAlive` and
-  `RunAtLoad` both true, this is what "survives reboots" on the card
-  actually refers to, confirmed against the template file itself. Linux
-  gets an analogous `systemd --user` unit (`renderSystemdUnit`,
-  `install.js:82-91`); Windows gets printed instructions only, no
-  autostart is set up automatically there (`install.js`'s own top comment).
-  If any of the 14 recipients are on Linux or Windows, the "survives
-  reboots" line on their card may not hold as written, flag this before
-  printing if that's a real possibility for this batch.
-- The "plug in first, then run the command" ordering matters: the
-  installer needs to find the device's serial port
-  (`helper/src/device.js`, matching on `vendorId === '303a'` with a
-  manufacturer/`pnpId` string fallback, confirmed at `device.js:21,61-71`)
-  to do anything useful.
-- `sam.marcus@me.com` is a placeholder contact and should stay as-is
-  unless Sam wants a different address on 14 physical cards handed to
-  coworkers.
 
 ---
 
-## QR code
+## Notes for whoever prints this
 
-`docs/make-qr.sh` renders a PNG of the **exact setup commands** from the
-back of the card, the two of them joined with `&&` so one paste runs both
-(not a URL, since there is no hosted page or public repo for this project
-yet, confirmed by `git remote -v` returning nothing in this repo).
-Scanning the code should let someone paste the commands straight into a
-terminal instead of typing them. `QR_TEXT` at the top of the script and
-the "Set up (one time)" block above must stay in sync; both currently
-encode the offline tarball install, not `npx`. If a public repo or docs
-page for this project exists by the time cards are printed, switching the
-QR payload to that URL instead of the raw command is a one-line edit to
-`make-qr.sh` (the `QR_TEXT` variable at the top), not a rewrite.
+Not printed. These are the checks behind each claim on the card.
 
-Run:
-
-```bash
-docs/make-qr.sh
-```
-
-Output: `docs/out/card-qr.png`. The script checks for `qrencode` first
-(`which qrencode`) and, if it's missing, prints `brew install qrencode`
-instead of failing silently. Confirmed on this machine, 2026-09-07:
-`qrencode` is **not currently installed** here (`which qrencode` returned
-nothing, and running the script produced exactly the install-hint output,
-exit code 1, no PNG), so running the script as-is right now will print the
-install hint rather than produce a PNG until `brew install qrencode` is
-run first.
+- **"It already works" is literally true and is the most important line.**
+  The firmware runs its own ambient animation forever on USB power with no
+  host software anywhere (`firmware/AMBIENT.md`). This matters because the
+  recipients are corporate employees who may never be allowed to, or want to,
+  run anything on a work machine. The card must not read as though the unit is
+  inert until they install something.
+- **The naming commands were taken from the shipped protocol**, not invented.
+  `name` is a real protocol field, capped at 24 characters, stored in the
+  device's NVS, and reloaded on every boot (`setOwnerName` / `loadOwnerName`
+  in `firmware/src/main.cpp`, and `docs/protocol.md` section 2.6). Two lines
+  on the card rather than one, deliberately: a bare
+  `> /dev/cu.usbmodem*` redirect is an ambiguous-redirect error in zsh the
+  moment a second USB device is attached, which is a bad first experience.
+- **"One file, no dependencies" is exact.** The helper is
+  `helper/codex-companion.js`, a single file, and `helper/package.json` has no
+  `dependencies` key at all. `npm install` in that directory installs nothing.
+  Requires Node 20 or newer.
+- **"Installs nothing" is exact.** The default command runs in the foreground
+  and Ctrl-C ends it completely. There is no launchd agent, no LaunchAgent
+  plist, no systemd unit, no login item, no cron entry, and no autostart of
+  any kind anywhere in the file. The only thing it can ever write is
+  `~/.codex/hooks.json`, and only if the recipient explicitly runs
+  `install-hook`, which prints the exact bytes first and is undone by
+  `uninstall-hook`. The card deliberately does not mention `install-hook`:
+  running the program in the foreground is the honest one-line pitch, and
+  anyone who wants the hook will find it in the program's own `help`.
+- **"It cannot approve anything" is true twice over**, which is why the card
+  says "ever" rather than "does not". The `PermissionRequest` handler writes
+  nothing to stdout and exits 0, which is Codex's documented way to decline to
+  decide; and it is registered `"async": true`, and Codex refuses to apply an
+  allow or a deny from an async handler at all. Either mechanism alone is
+  sufficient. See `helper/README.md`.
+- **"Never reads your prompts, code or output" is checkable.** The hook reads
+  exactly two fields of the payload (`hook_event_name` and `transcript_path`)
+  and, for numbers only, the tail of the session file, where a substring test
+  skips every line that is not token accounting or a turn boundary before
+  `JSON.parse` ever sees it. Everything that reaches the screen is a number, a
+  timestamp, or one of five fixed words.
+- **The "what it does not do" line is on the card on purpose.** These are
+  people who will reasonably wonder what a gift plugged into a work laptop is
+  doing. Answering before they ask is the point, and the answer is short
+  because it is genuinely short.
+- **No npm, no npx, no package name anywhere.** Earlier drafts of this card
+  printed `npm install -g ./codex-companion-1.0.0.tgz` and apologised at
+  length for an unpublished package name. That entire situation is gone: there
+  is no tarball to ship, no registry to check, and nothing to apologise for.
+  Do not reintroduce a package install here.
+- **`[URL]`** is the one real blocker. It has to be a place a coworker can
+  fetch a single `.js` file from. Nothing is hosted today. Until it is
+  decided, either fill it in, or hand the file over another way and rewrite
+  that paragraph to match. Do not print a URL that does not resolve.
+- **`[CONTACT]`** is whatever address Sam wants on fourteen physical cards
+  handed to coworkers.
+- **The QR code**, if you print one, is rendered by `docs/make-qr.sh` into
+  `docs/out/card-qr.png`. It encodes `[URL]`, so the script refuses to run
+  until that placeholder is replaced, on purpose: a QR that resolves to
+  nothing is worse than no QR. It needs `qrencode` (`brew install qrencode`)
+  and prints an install hint rather than failing silently. The QR is a
+  convenience and the first thing to cut, see `docs/wednesday-runbook.md`
+  section 7.

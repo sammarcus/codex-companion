@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # Renders the QR PNG for the printed card (docs/card.md) into docs/out/.
 #
-# By default this encodes the exact setup command from the back of the
-# card, not a URL: there is no hosted page or public repo for this
-# project yet (confirmed via `git remote -v` at doc-writing time). If a
-# public repo or docs page exists by the time cards are printed, change
-# QR_TEXT below to that URL instead.
+# The payload is the card's [URL]: the one place a recipient can fetch the
+# single optional helper file from. Keep CARD_URL below in sync with the
+# [URL] placeholder on the back of docs/card.md.
 #
-# The payload is the offline tarball install, NOT `npx codex-companion
-# install`: `npm view codex-companion` returned a registry 404 on
-# 2026-09-07, so the npx form would encode a command that cannot work.
-# Only switch back to npx after `npm view codex-companion` returns a
-# real version. See docs/card.md's notes on the back copy.
+# It is deliberately NOT a shell command any more. Earlier versions encoded
+# an npm/npx install line; there is no package, no tarball and no registry
+# involved now, and a QR that pastes a command into someone's terminal is a
+# worse idea than a QR that opens a page they can read first.
+#
+# Nothing is hosted yet, so CARD_URL is a placeholder and this script refuses
+# to render until it is replaced. A QR that resolves to nothing is worse than
+# no QR at all, and it is the one error you cannot spot on a printed card.
 #
 # Usage:
-#   docs/make-qr.sh              # renders the default setup command
+#   docs/make-qr.sh              # renders CARD_URL
 #   docs/make-qr.sh "some text"  # renders arbitrary text instead
 
 set -euo pipefail
@@ -23,8 +24,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/out"
 OUT_FILE="$OUT_DIR/card-qr.png"
 
-# Keep this in sync with docs/card.md's "Set up (one time)" line.
-QR_TEXT="${1:-npm install -g ./codex-companion-1.0.0.tgz && codex-companion install}"
+# Replace this with the real URL before printing. It must match the [URL]
+# placeholder on the back of docs/card.md.
+CARD_URL="REPLACE-ME"
+
+QR_TEXT="${1:-$CARD_URL}"
+
+if [ "$QR_TEXT" = "REPLACE-ME" ]; then
+  echo "CARD_URL is still the placeholder."
+  echo ""
+  echo "Set CARD_URL at the top of this script to the real URL (the same one"
+  echo "that replaces [URL] on the back of docs/card.md), or pass the text to"
+  echo "encode as an argument:"
+  echo ""
+  echo "    docs/make-qr.sh \"https://example.com/codex-companion.js\""
+  echo ""
+  exit 1
+fi
 
 if ! command -v qrencode >/dev/null 2>&1; then
   echo "qrencode not found. Install it with:"
