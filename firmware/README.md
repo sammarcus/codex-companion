@@ -157,6 +157,17 @@ Device to host:
 Lines longer than 512 bytes are discarded whole rather than truncated, so a
 partial write can never be parsed as a valid frame.
 
+**Known quirk, pre-existing and not introduced by the ambient work:** the
+device's USB CDC transmit path runs exactly one message behind. The `ok` for
+line N does not reach the host until the host writes line N+1; with a 3 second
+wait and nothing further sent, it never arrives at all. Verified on both the
+current firmware and the pre-ambient firmware on the same board, so it is in
+`HWCDC`, not in this code. Over the whole stream nothing is lost: the ack count
+always reconciles with the number of accepted lines. A host that treats a
+missing `ok` as a failure will mis-report the last line of every burst, so
+either treat the acks as a running count rather than a per-line handshake, or
+rely on the fact that the helper's own 2000ms keepalive keeps flushing them.
+
 ## Behaviour
 
 | State | Ring |
