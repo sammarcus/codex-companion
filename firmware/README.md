@@ -282,3 +282,19 @@ changes.
   before deciding whether to swap the panel's native 170x320: rotations **0 and
   2 are landscape, 1 and 3 are portrait**. 2 is the value every LovyanGFX
   config in the vendor SDK ships with.
+
+## Fleet image hash
+
+Every unit is flashed with the byte-identical image, so the whole fleet has one
+hash. Rebuild from a clean tree and compare:
+
+    cd firmware && rm -rf .pio && pio run
+    shasum -a 256 .pio/build/tdisplays3/firmware.bin
+
+A recipient who wants to check what is actually on their board can dump it and
+compare against the same value:
+
+    esptool.py --port /dev/cu.usbmodem<N> read_flash 0x10000 <size> dump.bin
+
+The hash changes whenever the firmware changes, so record it at flashing time
+alongside the fleet log rather than pinning a value in this file.
