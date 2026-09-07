@@ -13,8 +13,12 @@
 //   Malformed lines are ignored silently. A "state" value outside the five
 //   names above counts as malformed: no "ok", no partial application.
 //
-// The palette is docs/design-spec.md part 2 verbatim. Animation timing is
-// derived from it but diverges for "busy" and "idle"; see firmware/README.md.
+// The palette is docs/design-spec.md part 2 verbatim, plus one ambient-only
+// colour that part 2 has no state for. Animation timing is derived from it but
+// diverges for "busy" and "idle"; see firmware/README.md.
+//
+// With no host attached the device runs an ambient screen instead of looking
+// idle or asleep. See firmware/AMBIENT.md.
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -26,6 +30,23 @@
 #ifndef UNIT_ID
 #define UNIT_ID 0
 #endif
+
+// Optional owner name, baked in at build time next to UNIT_ID:
+//
+//   PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex\""' pio run
+//
+// tools/flash-all.sh reads tools/units.txt and does that quoting for you.
+// Unset (or set to an empty string) is a supported configuration, not an
+// error: the boot and ambient screens fall back to the UNIT_ID line, so a
+// board flashed with a plain `pio run -t upload` still reads correctly.
+#ifndef UNIT_NAME
+#define UNIT_NAME ""
+#endif
+
+static const char kUnitName[] = UNIT_NAME;
+static inline bool haveUnitName() { return kUnitName[0] != '\0'; }
+
+static constexpr const char* PRODUCT_NAME = "codex companion";
 
 // ---------------------------------------------------------------------------
 // Geometry (design-spec 2.1), landscape 320x170
@@ -53,6 +74,10 @@ static constexpr uint16_t C_BG        = 0x0000;
 static constexpr uint16_t C_TEXT      = 0xFFFF;
 static constexpr uint16_t C_TEXT_DIM  = 0x8410;
 static constexpr uint16_t C_TRACK     = 0x18E3;  // dark grey ring track
+// Ambient-only third colour stop. design-spec 2.3 has no "no host attached"
+// state, so its table has nothing to borrow here; this is a new value, picked
+// to sit between the two spec blues without reading as any live state.
+static constexpr uint16_t C_AMB_TEAL  = 0x2E98;  // #2ED3C6
 
 // ---------------------------------------------------------------------------
 // Timing (design-spec 2.4 / 2.8 and the protocol brief)
@@ -61,7 +86,25 @@ static constexpr uint32_t BOOT_HOLD_MS      = 2000;
 static constexpr uint32_t FRAME_MS          = 33;      // ~30 fps, sprite path
 static constexpr uint32_t FRAME_MS_NOBUF    = 200;     // ~5 fps, direct-to-LCD
 static constexpr uint32_t STALE_DIM_MS      = 30000;   // 30s no data -> dim
-static constexpr uint32_t STALE_SLEEP_MS    = 300000;  // 5 min no data -> sleep
+// 5 minutes with no host puts the device back into ambient mode. It used to
+// force ST_SLEEP, which on a desk with no host software at all left a dark,
+// near-dead-looking object; ambient is the resting look now, sleep is only
+// ever entered because a host explicitly asked for it.
+static constexpr uint32_t AMBIENT_AFTER_MS  = 300000;
+static constexpr uint32_t AMBIENT_BRIGHT_MS = 60000;   // then settle a tier down
+static constexpr uint32_t MODE_XFADE_MS     = 700;     // ambient <-> live handoff
+static constexpr uint32_t AMB_SWEEP_MS      = 24000;   // one comet lap
+static constexpr uint32_t AMB_BREATHE_MS    = 6500;    // slow brightness breathe
+static constexpr uint32_t AMB_HUE_MS        = 45000;   // colour drift, 3 stops
+// Burn-in drift. Two mutually prime-ish periods so the composition never
+// retraces the same path, and an amplitude big enough to smear the text edges
+// across several pixels over a few minutes.
+static constexpr uint32_t AMB_DRIFT_X_MS    = 97000;
+static constexpr uint32_t AMB_DRIFT_Y_MS    = 61000;
+static constexpr float    AMB_DRIFT_AX      = 9.0f;
+static constexpr float    AMB_DRIFT_AY      = 5.0f;
+static constexpr float    AMB_ARC_DEG       = 76.0f;   // comet head + tail
+static constexpr int      AMB_TAIL_SEGS     = 5;
 static constexpr uint32_t IDLE_DIM_MS       = 15000;   // idle held -> dim tier
 static constexpr uint32_t BUSY_PERIOD_MS    = 2400;    // slow breathe
 static constexpr uint32_t IDLE_PERIOD_MS    = 2400;    // low-amplitude breathe
@@ -130,6 +173,32 @@ static bool     dimmedByAuto    = false;  // auto tier currently holds us down
 static uint8_t  lastTier        = 0;      // 0 fresh, 1 dim, 2 sleep-dim
 static uint32_t lastButtonMs    = 0;
 static bool     lastButtonLevel = true;   // pull-up: true == released
+static uint32_t lastButton2Ms   = 0;
+static bool     lastButton2Level = true;
+
+// Ambient mode. `hostEverSpoke` latches on the first accepted protocol line
+// and never clears: a unit that has been driven once still falls back to
+// ambient when the host goes away, and a unit that never saw a host is in
+// ambient from the first frame after the boot screen.
+static bool     hostEverSpoke   = false;
+static bool     ambientMode     = true;
+static uint32_t ambientEnterMs  = 0;
+static uint32_t modeChangeMs    = 0;
+static uint16_t xfadeFrom       = C_BOOT;  // accent the last mode ended on
+static uint16_t lastAccent      = C_BOOT;
+
+// Cross-fade state read by every draw helper, so ambient and live frames
+// share one handoff instead of each rolling their own.
+static float    gXfade     = 1.0f;   // 0 = old mode's colour, 1 = settled
+static uint16_t gXfadeFrom = C_BOOT;
+
+// Whole-composition offset, in pixels. Non-zero only in ambient mode.
+static int      gOx = 0;
+static int      gOy = 0;
+
+// Button-1 acknowledgement of a "waiting" prompt: quiets the pulse without
+// changing the state the host reported. Cleared on the next state change.
+static bool     waitAcked  = false;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -166,6 +235,12 @@ static uint16_t mixColor(uint16_t a, uint16_t b, float f) {
   if (g < 0) g = 0; if (g > 0x3F) g = 0x3F;
   if (bl < 0) bl = 0; if (bl > 0x1F) bl = 0x1F;
   return (uint16_t)((r << 11) | (g << 5) | bl);
+}
+
+// Apply the mode cross-fade to a colour: at gXfade == 0 it is the dimmed
+// accent the previous mode ended on, at 1 it is the colour as authored.
+static uint16_t xf(uint16_t c) {
+  return mixColor(scaleColor(gXfadeFrom, 0.30f), c, gXfade);
 }
 
 // 0..1 sine breathe from a 0..1 phase.
@@ -205,6 +280,26 @@ static StateId parseStateName(const char* s, bool* ok) {
   return st.state;
 }
 
+// "UNIT 03", or "UNIT -- AB12" when UNIT_ID was never injected.
+//
+// The MAC suffix must come from the LAST two bytes (mac[4], mac[5]), which are
+// the per-device half. The first three are the Espressif OUI and are identical
+// on every board in the batch, so a suffix taken from that end would print the
+// same four hex digits on all 14 units. ESP.getEfuseMac() returns a uint64_t
+// that IDF filled by writing 6 bytes through a uint8_t*, so on this
+// little-endian target its low 16 bits are mac[0]/mac[1], i.e. the OUI.
+// Reading the byte buffer directly sidesteps that trap and matches
+// docs/design-spec.md 2.6 ("%02X%02X", mac[4], mac[5]).
+static void unitIdString(char* out, size_t cap) {
+#if UNIT_ID == 0
+  uint8_t mac[6] = {0};
+  esp_efuse_mac_get_default(mac);
+  snprintf(out, cap, "UNIT -- %02X%02X", (unsigned)mac[4], (unsigned)mac[5]);
+#else
+  snprintf(out, cap, "UNIT %02d", (int)UNIT_ID);
+#endif
+}
+
 static void setBrightness(uint8_t idx) {
   if (idx >= BRIGHT_LEVEL_COUNT) idx = BRIGHT_LEVEL_COUNT - 1;
   brightIdx = idx;
@@ -241,6 +336,9 @@ static bool applyJsonLine(const char* line, size_t len) {
       // still, so re-arming on a repeat would play the flash three times per
       // completed turn; a repeated "done" line is a keepalive, nothing more.
       if (ns == ST_DONE)    doneEnterMs = millis();
+      // The acknowledgement is scoped to one prompt, so any state change
+      // retires it. The next "waiting" starts impatient again.
+      waitAcked    = false;
       st.state     = ns;
       stateEnterMs = millis();
     }
@@ -291,7 +389,8 @@ static void pumpSerial() {
       if (lineLen > 0 && !lineOver) {
         lineBuf[lineLen] = '\0';
         if (applyJsonLine(lineBuf, lineLen)) {
-          lastDataMs = millis();
+          lastDataMs    = millis();
+          hostEverSpoke = true;
           Serial.println("ok");
         }
         // malformed: ignored silently, no reply
@@ -322,15 +421,18 @@ static void drawRing(float fraction, uint16_t color, int rIn, int rOut,
                      uint16_t trackColor) {
   if (rIn < 0) rIn = 0;
   if (rOut <= rIn) rOut = rIn + 1;
-  gfx->fillArc(RING_CX, RING_CY, rIn, rOut, 0.0f, 360.0f, trackColor);
+  const int cx = RING_CX + gOx;
+  const int cy = RING_CY + gOy;
+  color      = xf(color);
+  trackColor = xf(trackColor);
+  gfx->fillArc(cx, cy, rIn, rOut, 0.0f, 360.0f, trackColor);
   float f = clampf(fraction, 0.0f, 1.0f);
   if (f <= 0.0f) return;
   if (f >= 1.0f) {
-    gfx->fillArc(RING_CX, RING_CY, rIn, rOut, 0.0f, 360.0f, color);
+    gfx->fillArc(cx, cy, rIn, rOut, 0.0f, 360.0f, color);
     return;
   }
-  gfx->fillArc(RING_CX, RING_CY, rIn, rOut, ARC_START, ARC_START + 360.0f * f,
-               color);
+  gfx->fillArc(cx, cy, rIn, rOut, ARC_START, ARC_START + 360.0f * f, color);
 }
 
 // Amber pulse period: shortens as tokens/sec rises, then halves once the
@@ -358,23 +460,23 @@ static void drawText(uint32_t nowMs, uint16_t accent, bool showCenter) {
   if (st.label[0] != '\0') {
     // Primary tier: the label is the word the recipient reads at desk
     // distance, so it gets C_TEXT and the sub line keeps C_TEXT_DIM.
-    gfx->setTextColor(C_TEXT, C_BG);
+    gfx->setTextColor(scaleColor(C_TEXT, gXfade), C_BG);
     gfx->setFont(&fonts::Font2);
     gfx->setTextSize(1);
-    gfx->drawString(st.label, RING_CX, LABEL_Y);
+    gfx->drawString(st.label, RING_CX + gOx, LABEL_Y + gOy);
   }
   if (st.sub[0] != '\0') {
-    gfx->setTextColor(C_TEXT_DIM, C_BG);
+    gfx->setTextColor(scaleColor(C_TEXT_DIM, gXfade), C_BG);
     gfx->setFont(&fonts::Font0);
     gfx->setTextSize(1);
-    gfx->drawString(st.sub, RING_CX, SUB_Y);
+    gfx->drawString(st.sub, RING_CX + gOx, SUB_Y + gOy);
   }
   if (showCenter && st.center[0] != '\0') {
     gfx->setTextDatum(textdatum_t::middle_center);
     // No opaque background here: renderFrame clears the whole buffer every
     // frame, so an opaque box buys nothing and a long string would punch it
     // straight through the ring stroke at mid-height.
-    gfx->setTextColor(accent);
+    gfx->setTextColor(xf(accent));
     gfx->setTextSize(1);
 
     char buf[sizeof(st.center)];
@@ -392,7 +494,7 @@ static void drawText(uint32_t nowMs, uint16_t accent, bool showCenter) {
       buf[n - 1] = '\0';
     }
 
-    if (buf[0] != '\0') gfx->drawString(buf, RING_CX, RING_CY);
+    if (buf[0] != '\0') gfx->drawString(buf, RING_CX + gOx, RING_CY + gOy);
   }
 }
 
@@ -400,12 +502,11 @@ static void drawText(uint32_t nowMs, uint16_t accent, bool showCenter) {
 // Shared by renderFrame and updateBrightness so the panel's content and its
 // backlight can never disagree about what the device is doing.
 //
-// lastDataMs is seeded at boot, so a board sitting on a desk with no host dims
-// and then sleeps on the same schedule as one whose host went away.
+// Past AMBIENT_AFTER_MS this value stops being rendered at all: ambient mode
+// takes the screen. ST_SLEEP is therefore only ever reached because a host
+// asked for it, never because a host went missing.
 static StateId effectiveState(uint32_t nowMs) {
   uint32_t sinceData = nowMs - lastDataMs;
-  // 5 minutes with no host data forces sleep regardless of last reported state.
-  if (sinceData >= STALE_SLEEP_MS) return ST_SLEEP;
   // Past the 30s dim mark the host is gone but not yet declared dead. Holding
   // the escalated red "waiting" pulse there would keep demanding attention for
   // an approval prompt that no longer exists, so the two active states fall
@@ -418,16 +519,13 @@ static StateId effectiveState(uint32_t nowMs) {
   return st.state;
 }
 
-static void renderFrame(uint32_t nowMs) {
-  gfx->fillScreen(C_BG);
+static void renderLive(uint32_t nowMs, uint32_t dtMs) {
+  StateId  eff = effectiveState(nowMs);
 
-  uint32_t dtMs = nowMs - lastFrameMs;
-  if (dtMs > 500) dtMs = 500;          // clamp after a stall, no phase jump
-  lastFrameMs = nowMs;
-
-  uint32_t sinceData  = nowMs - lastDataMs;
-  bool     staleSleep = sinceData >= STALE_SLEEP_MS;
-  StateId  eff        = effectiveState(nowMs);
+  // The ack belongs to one prompt. A state change clears it in the parser;
+  // this clears it when the 30s staleness fallback pulls the rendered state
+  // off "waiting" without any line arriving to do it.
+  if (eff != ST_WAITING) waitAcked = false;
 
   uint16_t accent = C_IDLE;
   float    level  = 1.0f;
@@ -465,6 +563,19 @@ static void renderFrame(uint32_t nowMs) {
       break;
     }
     case ST_WAITING: {
+      if (waitAcked) {
+        // Button 1 was pressed while this prompt was up: "I have seen it."
+        // Hold a calm, steady amber ring instead. No pulse, no escalation to
+        // red, no stroke movement. The state itself is untouched, so the
+        // colour still says a prompt is pending, it just stops nagging.
+        // Reset the phase so a later un-acked wait starts from the trough.
+        waitPhase = 0.0f;
+        accent    = C_WAIT;
+        level     = 0.62f;
+        drawRing(st.ring, scaleColor(accent, level), RING_R_IN, RING_R_OUT,
+                 scaleColor(C_TRACK, 0.5f));
+        break;
+      }
       // Amber pulse; faster with tps, escalates to red after 10s.
       uint32_t waited = nowMs - waitEnterMs;
       bool escalated  = waited >= WAIT_ESCALATE_MS;
@@ -524,9 +635,124 @@ static void renderFrame(uint32_t nowMs) {
     }
   }
 
-  // A stale-sleep frame carries whatever percentage was last received, which
-  // may be minutes old, so the number is dropped rather than shown as current.
-  drawText(nowMs, accent, !staleSleep);
+  drawText(nowMs, accent, true);
+  lastAccent = accent;
+}
+
+// ---------------------------------------------------------------------------
+// Ambient mode
+//
+// What the device does when no host has ever spoken, and what it falls back to
+// AMBIENT_AFTER_MS after one goes away. The whole point of this mode is that a
+// recipient who never installs the host software still gets an object worth
+// leaving switched on, so it deliberately shows no error, no "waiting for
+// host", and no still frame: the comet is always moving, even at the bottom of
+// the breathe.
+// ---------------------------------------------------------------------------
+
+// Three-stop colour loop. Two of the stops are design-spec 2.3 blues; the
+// third is the ambient-only teal, which is what stops the drift from reading
+// as one flat blue for 45 seconds.
+static uint16_t ambientAccent(uint32_t nowMs) {
+  static const uint16_t stops[3] = { C_IDLE, C_AMB_TEAL, C_BOOT };
+  float p   = (float)(nowMs % AMB_HUE_MS) / (float)AMB_HUE_MS * 3.0f;
+  int   seg = (int)p;
+  if (seg > 2) seg = 2;
+  return mixColor(stops[seg], stops[(seg + 1) % 3], p - (float)seg);
+}
+
+static void renderAmbient(uint32_t nowMs) {
+  const int cx = RING_CX + gOx;
+  const int cy = RING_CY + gOy;
+
+  uint16_t accent = ambientAccent(nowMs);
+  float    level  = 0.45f + 0.45f * breathe(nowMs, AMB_BREATHE_MS);
+
+  // Faint full track so the ring reads as a ring, not a lone floating arc.
+  gfx->fillArc(cx, cy, RING_R_IN, RING_R_OUT, 0.0f, 360.0f,
+               xf(scaleColor(C_TRACK, 0.7f)));
+
+  // Comet: a head plus a tail of dimmer segments, one lap per AMB_SWEEP_MS.
+  // At 24s a lap that is about 15 degrees per second, slow enough to read as
+  // drifting rather than spinning.
+  float head = ARC_START +
+               360.0f * ((float)(nowMs % AMB_SWEEP_MS) / (float)AMB_SWEEP_MS);
+  float seg  = AMB_ARC_DEG / (float)AMB_TAIL_SEGS;
+  for (int i = 0; i < AMB_TAIL_SEGS; ++i) {
+    float k = level * (1.0f - 0.19f * (float)i);
+    // Half a degree of overlap: adjacent fillArc calls otherwise leave a
+    // visible hairline of track colour between segments.
+    gfx->fillArc(cx, cy, RING_R_IN, RING_R_OUT,
+                 head - seg * (float)(i + 1) - 0.5f, head - seg * (float)i,
+                 xf(scaleColor(accent, k)));
+  }
+
+  // Text. The owner name is the headline when there is one; otherwise the
+  // product name takes the top line and the unit id sits below it. Nothing
+  // here ever says "no host", because from the recipient's side there is
+  // nothing wrong.
+  char unit[24];
+  unitIdString(unit, sizeof(unit));
+
+  gfx->setTextDatum(textdatum_t::top_center);
+  gfx->setTextSize(1);
+
+  gfx->setTextColor(scaleColor(C_TEXT, gXfade * 0.88f), C_BG);
+  gfx->setFont(&fonts::Font2);
+  gfx->drawString(haveUnitName() ? kUnitName : PRODUCT_NAME,
+                  RING_CX + gOx, LABEL_Y + gOy);
+
+  gfx->setTextColor(scaleColor(C_TEXT_DIM, gXfade), C_BG);
+  gfx->setFont(&fonts::Font0);
+  gfx->drawString(haveUnitName() ? PRODUCT_NAME : unit,
+                  RING_CX + gOx, SUB_Y + gOy);
+
+  lastAccent = accent;
+}
+
+// True whenever the live view has nothing honest to show.
+static bool ambientActive(uint32_t nowMs) {
+  if (!hostEverSpoke) return true;
+  return (nowMs - lastDataMs) >= AMBIENT_AFTER_MS;
+}
+
+// Flip the mode and arm the cross-fade. Called from loop() before both the
+// brightness ladder and the renderer, so the two can never disagree about
+// which mode this tick is in.
+static void updateMode(uint32_t nowMs) {
+  bool amb = ambientActive(nowMs);
+  if (amb == ambientMode) return;
+  ambientMode  = amb;
+  modeChangeMs = nowMs;
+  xfadeFrom    = lastAccent;
+  if (amb) ambientEnterMs = nowMs;
+}
+
+static void renderFrame(uint32_t nowMs) {
+  uint32_t dtMs = nowMs - lastFrameMs;
+  if (dtMs > 500) dtMs = 500;          // clamp after a stall, no phase jump
+  lastFrameMs = nowMs;
+
+  gXfade     = (MODE_XFADE_MS == 0)
+                 ? 1.0f
+                 : clampf((float)(nowMs - modeChangeMs) / (float)MODE_XFADE_MS,
+                          0.0f, 1.0f);
+  gXfadeFrom = xfadeFrom;
+
+  // Burn-in drift, applied to the whole composition. It winds up as ambient
+  // takes over and unwinds to exactly zero as live does, so the live layout
+  // still lands on the pixel-exact geometry of design-spec 2.1.
+  float driftK = ambientMode ? gXfade : (1.0f - gXfade);
+  float px = sinf((float)(nowMs % AMB_DRIFT_X_MS) / (float)AMB_DRIFT_X_MS *
+                  2.0f * (float)M_PI);
+  float py = sinf((float)(nowMs % AMB_DRIFT_Y_MS) / (float)AMB_DRIFT_Y_MS *
+                  2.0f * (float)M_PI);
+  gOx = (int)lroundf(AMB_DRIFT_AX * px * driftK);
+  gOy = (int)lroundf(AMB_DRIFT_AY * py * driftK);
+
+  gfx->fillScreen(C_BG);
+  if (ambientMode) renderAmbient(nowMs);
+  else             renderLive(nowMs, dtMs);
   if (fbReady) fb.pushSprite(0, 0);
 }
 
@@ -536,40 +762,39 @@ static void drawBootScreen() {
   gfx->setTextColor(C_BOOT, C_BG);
   gfx->setFont(&fonts::Font4);
   gfx->setTextSize(1);
-  gfx->drawString("codex companion", SCREEN_W / 2, 70);
+  gfx->drawString(PRODUCT_NAME, SCREEN_W / 2, 70);
 
+  // UNIT_ID is never injected on the plain `pio run -t upload` path, so
+  // unitIdString() renders "UNIT -- <MAC>" there rather than a "UNIT 00" that
+  // would read like a real serial number. See its comment for why the suffix
+  // has to come from the tail of the MAC.
   char unit[24];
-#if UNIT_ID == 0
-  // UNIT_ID was never injected. tools/flash-all.sh passes -DUNIT_ID=<n> for
-  // units 1..14, so reaching this means the plain `pio run -t upload` path was
-  // used. "UNIT 00" would look like a real serial number; show an obviously
-  // unset marker plus the efuse MAC suffix so 14 identical boards are still
-  // tellable apart.
-  //
-  // The suffix must come from the LAST two MAC bytes (mac[4], mac[5]), which
-  // are the per-device half. The first three are the Espressif OUI and are
-  // identical on every board in the batch, so a suffix taken from that end
-  // would print the same four hex digits on all 14 units. ESP.getEfuseMac()
-  // returns a uint64_t that IDF filled by writing 6 bytes through a uint8_t*
-  // (Esp.cpp: esp_efuse_mac_get_default((uint8_t*)&_chipmacid)), so on this
-  // little-endian target its low 16 bits are mac[0]/mac[1], i.e. the OUI.
-  // Reading the byte buffer directly sidesteps that trap entirely and matches
-  // docs/design-spec.md 2.6 ("%02X%02X", mac[4], mac[5]).
-  uint8_t mac[6] = {0};
-  esp_efuse_mac_get_default(mac);
-  snprintf(unit, sizeof(unit), "UNIT -- %02X%02X",
-           (unsigned)mac[4], (unsigned)mac[5]);
-#else
-  snprintf(unit, sizeof(unit), "UNIT %02d", (int)UNIT_ID);
-#endif
-  gfx->setTextColor(C_TEXT_DIM, C_BG);
-  gfx->setFont(&fonts::Font2);
-  gfx->drawString(unit, SCREEN_W / 2, 108);
+  unitIdString(unit, sizeof(unit));
+
+  if (haveUnitName()) {
+    // Named build: the owner's name is the second line and the unit id drops
+    // to a third, smaller line. Both are still shown, so assembly-day
+    // identification does not depend on remembering who got which name.
+    gfx->setTextColor(C_TEXT, C_BG);
+    gfx->setFont(&fonts::Font2);
+    gfx->drawString(kUnitName, SCREEN_W / 2, 106);
+    gfx->setTextColor(C_TEXT_DIM, C_BG);
+    gfx->setFont(&fonts::Font0);
+    gfx->drawString(unit, SCREEN_W / 2, 132);
+  } else {
+    gfx->setTextColor(C_TEXT_DIM, C_BG);
+    gfx->setFont(&fonts::Font2);
+    gfx->drawString(unit, SCREEN_W / 2, 108);
+  }
   if (fbReady) fb.pushSprite(0, 0);
 }
 
 // ---------------------------------------------------------------------------
-// Button 1 (GPIO 0, active low): wake to full brightness, then cycle tiers.
+// Button 1 (GPIO 0, active low): acknowledge a pending prompt if there is one,
+// otherwise the pre-existing behaviour -- wake to full brightness, then cycle
+// brightness tiers. Brightness now also has a dedicated button (button 2), but
+// button 1 keeps its cycling so a unit whose GPIO 14 switch is unreachable in
+// its case is not left without one.
 // ---------------------------------------------------------------------------
 static void pumpButton(uint32_t nowMs) {
   bool level = digitalRead(PIN_BUTTON_1) != 0;   // true == released (pull-up)
@@ -578,6 +803,19 @@ static void pumpButton(uint32_t nowMs) {
   if (level) return;                             // only act on press
   if (nowMs - lastButtonMs < BUTTON_DEBOUNCE_MS) return;
   lastButtonMs = nowMs;
+
+  // Acknowledge takes priority over everything else while a prompt is up. One
+  // press quiets the pulse; a second press falls through to the brightness
+  // behaviour below, so the button is never a dead key.
+  if (!ambientMode && !waitAcked && effectiveState(nowMs) == ST_WAITING) {
+    waitAcked = true;
+    if (dimmedByAuto) {                          // an ack is also an interaction
+      setBrightness(BRIGHT_FULL_IDX);
+      dimmedByAuto = false;
+      brightManual = true;
+    }
+    return;
+  }
 
   // The wake case is tracked with an explicit flag rather than inferred from
   // brightIdx. Inferring it made the "cycle" a two-level toggle: from 255 the
@@ -592,6 +830,26 @@ static void pumpButton(uint32_t nowMs) {
   brightManual = true;
 }
 
+// ---------------------------------------------------------------------------
+// Button 2 (GPIO 14, active low, same INPUT_PULLUP wiring as button 1 in every
+// vendor example that reads it): a dedicated brightness cycle. It was
+// previously unused. Unlike button 1 it never wakes-then-cycles: one press is
+// always exactly one step, which is what makes it predictable as the
+// brightness control.
+// ---------------------------------------------------------------------------
+static void pumpButton2(uint32_t nowMs) {
+  bool level = digitalRead(PIN_BUTTON_2) != 0;   // true == released (pull-up)
+  if (level == lastButton2Level) return;
+  lastButton2Level = level;
+  if (level) return;                             // only act on press
+  if (nowMs - lastButton2Ms < BUTTON_DEBOUNCE_MS) return;
+  lastButton2Ms = nowMs;
+
+  setBrightness((uint8_t)((brightIdx + 1) % BRIGHT_LEVEL_COUNT));
+  brightManual = true;
+  dimmedByAuto = false;
+}
+
 // Auto brightness. Two inputs, and the dimmer of the two wins:
 //   staleness  - full while fresh, dim after 30s, sleep-dim after 5 min
 //   state      - sleep dims immediately, idle dims once it has been held
@@ -603,18 +861,25 @@ static void pumpButton(uint32_t nowMs) {
 // A button press pins the level; the pin is released only when the tier
 // actually changes, so a hand-picked level survives a busy data stream.
 static void updateBrightness(uint32_t nowMs, StateId eff) {
-  uint32_t since = nowMs - lastDataMs;
   uint8_t tier = 0;
-  if (since >= STALE_SLEEP_MS)     tier = 2;
-  else if (since >= STALE_DIM_MS)  tier = 1;
 
-  uint8_t stateTier = 0;
-  if (eff == ST_SLEEP) {
-    stateTier = 2;
-  } else if (eff == ST_IDLE && (nowMs - stateEnterMs) >= IDLE_DIM_MS) {
-    stateTier = 1;
+  if (ambientMode) {
+    // Ambient is the resting look, not a fault, so it stays properly lit for a
+    // minute (a freshly plugged-in unit should look like it is showing you
+    // something) and then settles one tier down for the rest of its life. It
+    // never reaches the sleep tier: the whole point is that it stays readable.
+    tier = (nowMs - ambientEnterMs) >= AMBIENT_BRIGHT_MS ? 1 : 0;
+  } else {
+    if ((nowMs - lastDataMs) >= STALE_DIM_MS) tier = 1;
+
+    uint8_t stateTier = 0;
+    if (eff == ST_SLEEP) {
+      stateTier = 2;
+    } else if (eff == ST_IDLE && (nowMs - stateEnterMs) >= IDLE_DIM_MS) {
+      stateTier = 1;
+    }
+    if (stateTier > tier) tier = stateTier;
   }
-  if (stateTier > tier) tier = stateTier;
 
   static const uint8_t TIER_IDX[3] = {
     BRIGHT_FULL_IDX, BRIGHT_DIM_IDX, BRIGHT_SLEEP_IDX
@@ -639,6 +904,7 @@ void setup() {
   digitalWrite(PIN_POWER_ON, HIGH);
 
   pinMode(PIN_BUTTON_1, INPUT_PULLUP);
+  pinMode(PIN_BUTTON_2, INPUT_PULLUP);
 
   // HWCDC's RX queue defaults to 256 bytes. The helper starts streaming the
   // moment the port opens, without waiting for the hello line, so several
@@ -684,6 +950,7 @@ void setup() {
     // real line.
     pumpSerial();
     pumpButton(millis());
+    pumpButton2(millis());
     delay(10);
   }
 
@@ -694,7 +961,18 @@ void setup() {
   doneEnterMs     = millis();
   stateEnterMs    = millis();
   lastFrameMs     = millis();
-  lastButtonLevel = digitalRead(PIN_BUTTON_1) != 0;
+  lastButtonLevel  = digitalRead(PIN_BUTTON_1) != 0;
+  lastButton2Level = digitalRead(PIN_BUTTON_2) != 0;
+
+  // Hand the boot screen over to ambient with the same cross-fade the device
+  // uses between modes, so the first thing after the wordmark is a fade rather
+  // than a cut. A line that arrived during the boot hold has already latched
+  // hostEverSpoke, so a board plugged into a running host goes straight to
+  // live and the fade runs in that direction instead.
+  ambientMode    = ambientActive(millis());
+  ambientEnterMs = millis();
+  modeChangeMs   = millis();
+  xfadeFrom      = C_BOOT;
 }
 
 void loop() {
@@ -703,6 +981,8 @@ void loop() {
 
   pumpSerial();
   pumpButton(now);
+  pumpButton2(now);
+  updateMode(now);
   updateBrightness(now, effectiveState(now));
 
   // Direct-to-panel fallback has no back buffer, so it redraws far more slowly

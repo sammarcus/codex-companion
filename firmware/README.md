@@ -15,12 +15,15 @@ streams newline-delimited JSON over USB serial at 115200.
 | `src/LGFX_TDisplayS3.hpp` | LovyanGFX device config (Bus_Parallel8 + Panel_ST7789 + Light_PWM) |
 | `src/main.cpp` | protocol parser, state machine, ring renderer |
 | `tools/sim.py` | streams a demo protocol sequence at a board over serial |
-| `tools/flash-all.sh` | flashes units 1..14, stamping `UNIT_ID` per board |
+| `tools/flash-all.sh` | flashes units 1..14, stamping `UNIT_ID` and `UNIT_NAME` per board |
+| `tools/units.txt` | per-unit owner names, one per line, read by `flash-all.sh` |
+| `AMBIENT.md` | ambient mode, personalization flags, button behaviour |
 
 Pins, panel offsets and invert flags all come from `../docs/hardware-recon.md`,
 which cites the vendor sources line by line. The palette comes from
 `../docs/design-spec.md` part 2 verbatim (all eight colours round-trip to the
-RGB565 constants in `src/main.cpp`). Animation timing is derived from part 2
+RGB565 constants in `src/main.cpp`), plus one ambient-only teal that part 2 has
+no state for. Animation timing is derived from part 2
 but deliberately diverges for two states: `busy` breathes on part 2's 2400ms
 `idle` period instead of running its 1000ms linear spinner, and `idle` is a
 low-amplitude brightness breathe on the reported fill rather than part 2's
@@ -48,11 +51,20 @@ cd firmware
 pio run
 ```
 
-Build one unit's image with its serial number baked in:
+Build one unit's image with its serial number, and optionally its owner's
+name, baked in:
 
 ```sh
 PLATFORMIO_BUILD_FLAGS="-DUNIT_ID=3" pio run
+PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex Rivera\""' pio run
 ```
+
+`UNIT_NAME` is optional. The quotes are part of the macro body and PlatformIO
+shlex-splits the environment variable, which is why the inner pair is escaped;
+`tools/flash-all.sh` handles that quoting from `tools/units.txt` for you. With
+a name set the boot screen reads product name / owner name / unit id and the
+ambient screen leads with the owner name. With no name both fall back to the
+unit id, so an unnamed build is a supported configuration, not a broken one.
 
 `UNIT_ID` is not set in `platformio.ini` on purpose, and the environment
 variable appends to (does not replace) the project's own build flags, so a
@@ -78,12 +90,17 @@ pio run -t upload                       # auto-detects the port
 pio run -t upload --upload-port /dev/cu.usbmodem1101
 ```
 
-All 14 units, one at a time, prompting for a board swap between each:
+All 14 units, one at a time, prompting for a board swap between each. Names
+come from `tools/units.txt` (line N is unit N, counting non-comment lines):
 
 ```sh
 ./tools/flash-all.sh          # units 1..14
 ./tools/flash-all.sh 5 8      # units 5..8 only
+NAMES_FILE=other.txt ./tools/flash-all.sh
 ```
+
+The file ships with placeholder names. `flash-all.sh` warns on stderr and marks
+`tools/fleet-log.tsv` if it flashes one, so a forgotten edit is not silent.
 
 If a board will not enter download mode: hold **BOOT** (button 1, GPIO 0),
 tap **RST**, release BOOT, then run the upload.
@@ -146,9 +163,13 @@ partial write can never be parsed as a valid frame.
 |---|---|
 | `idle` | ring shows the reported fill, with a low-amplitude 2400ms brightness breathe so a live unit never looks frozen |
 | `busy` | slow breathe, 2400ms sine, amber; ring shows the reported fill |
-| `waiting` | amber pulse on the reported fill; period shortens as `tps` rises (900ms down to 700ms), then flips to red and halves at 10s |
+| `waiting` | amber pulse on the reported fill; period shortens as `tps` rises (900ms down to 700ms), then flips to red and halves at 10s. Button 1 acknowledges it: steady amber, no pulse, no escalation, until the next state change |
 | `done` | green flash, 600ms: ramps up over 120ms, decays, then cross-fades into the idle look over the last 150ms. Armed only on the transition into `done`, so a repeated `done` line is a keepalive and does not replay the flash |
 | `sleep` | dim slow breathe, 4000ms, full ring |
+
+All five of those are the **live** view, which the device shows only while a
+host is actually talking to it. With no host it runs ambient mode instead; see
+`AMBIENT.md`.
 
 Staleness, measured from the last accepted line:
 
@@ -156,19 +177,27 @@ Staleness, measured from the last accepted line:
   fall back to the idle look so a dead host cannot leave the board pulsing red
   for an approval prompt that no longer exists. The stored state is untouched;
   one fresh line restores it.
-- **5 min** with no data: forced to `sleep` regardless of the last reported
-  state, and the centre text is blanked rather than showing a minutes-old
-  percentage.
+- **5 min** with no data: back to ambient mode. This used to force `sleep`,
+  which left a unit with no host software permanently dark; `sleep` is now
+  reached only when a host asks for it.
 
-Backlight, whichever of the two is dimmer:
+Backlight:
 
-- staleness: full while fresh, `70` after 30s, `20` after 5 min
-- state: `20` while `sleep` is held, `70` once `idle` has been held 15s, full
-  otherwise
+- ambient: full for the first 60s, then the `70` tier for as long as it lasts.
+  It never reaches the `20` sleep tier.
+- live, whichever of the two is dimmer: staleness (full while fresh, `70` after
+  30s) and state (`20` while `sleep` is held, `70` once `idle` has been held
+  15s, full otherwise)
 
-Button 1 (GPIO 0, the BOOT button) wakes the display to full brightness if the
-auto ladder had dimmed it; otherwise each press steps 255 -> 160 -> 70 -> 20 ->
-255. A manual level holds until the auto tier itself changes.
+Button 1 (GPIO 0, the BOOT button) acknowledges a pending `waiting` prompt if
+there is one: the pulse settles to a steady amber and stops escalating to red
+until the next state change. With nothing to acknowledge it does what it always
+did, waking the display to full brightness if the auto ladder had dimmed it,
+otherwise stepping 255 -> 160 -> 70 -> 20 -> 255.
+
+Button 2 (GPIO 14) is a dedicated brightness cycle: one press, one step, no
+wake-first special case. A manual level holds until the auto tier itself
+changes.
 
 ## Hardware notes
 

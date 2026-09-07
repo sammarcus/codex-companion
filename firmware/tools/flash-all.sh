@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Flash all 14 Codex Desk Companion units, stamping each with its UNIT_ID.
+# Flash all 14 Codex Desk Companion units, stamping each with its UNIT_ID and
+# (when tools/units.txt names one) its owner name.
 #
 # Run from the firmware/ directory. For each unit it waits for a board to
-# enumerate as /dev/cu.usbmodem*, builds with -DUNIT_ID=<n>, uploads, then
-# prompts you to swap in the next board.
+# enumerate with the ESP32-S3 native USB id, builds with -DUNIT_ID=<n> plus
+# -DUNIT_NAME="<name>", uploads, verifies the serial greeting, then prompts you
+# to swap in the next board.
 #
 #   ./tools/flash-all.sh          # units 1..14
 #   ./tools/flash-all.sh 5 8      # units 5..8 only
+#   NAMES_FILE=/path/to/other.txt ./tools/flash-all.sh
+#
+# Names come from tools/units.txt; see the header of that file for the format.
+# A missing names file, or a blank line for a unit, is not an error: that board
+# is built with no -DUNIT_NAME and falls back to showing "UNIT NN".
 #
 # Nothing here runs during a build; it is operator tooling for assembly day.
 
@@ -17,6 +24,7 @@ LAST="${2:-14}"
 ENV_NAME="tdisplays3"
 PORT_GLOB="/dev/cu.usbmodem*"
 WAIT_TIMEOUT=120
+NAMES_FILE="${NAMES_FILE:-tools/units.txt}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$here"
@@ -36,6 +44,23 @@ ports = [d['port'] for d in json.load(sys.stdin)
          if want in (d.get('hwid') or '').upper()]
 print(ports[0] if ports else '')
 "
+}
+
+# Name for unit N: the Nth non-comment line of the names file, trimmed.
+# Blank lines still consume a slot, which is what keeps "line N is unit N" true
+# when a unit is deliberately left unnamed.
+#
+# Backslashes and double quotes are stripped: the name has to survive being
+# spliced into a -DUNIT_NAME="\"...\"" build flag, and neither character has any
+# business in a person's display name here.
+unit_name() {
+  local want="$1"
+  [ -f "$NAMES_FILE" ] || return 0
+  awk -v want="$want" '
+    /^[[:space:]]*#/ { next }
+    { n++; if (n == want) { print; exit } }
+  ' "$NAMES_FILE" \
+    | sed -e 's/[\\"]//g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
 port_serial() {
@@ -104,16 +129,38 @@ for unit in $(seq "$FIRST" "$LAST"); do
   # force a clean object for the one translation unit that reads it.
   rm -f ".pio/build/${ENV_NAME}/src/main.cpp.o"
 
-  PLATFORMIO_BUILD_FLAGS="-DUNIT_ID=${unit}" \
+  name="$(unit_name "$unit" || true)"
+  build_flags="-DUNIT_ID=${unit}"
+  if [ -n "$name" ]; then
+    # The literal the compiler must end up seeing is -DUNIT_NAME="Alex", i.e.
+    # the quotes are part of the macro body. PlatformIO shlex-splits
+    # PLATFORMIO_BUILD_FLAGS, so the inner quotes have to be backslash-escaped
+    # in the value of the variable itself.
+    build_flags="${build_flags} -DUNIT_NAME=\"\\\"${name}\\\"\""
+    echo "unit $unit name: $name"
+  else
+    echo "unit $unit name: (none, board will show UNIT $(printf '%02d' "$unit"))"
+  fi
+
+  name_note="ok"
+  case "$name" in
+    Placeholder\ [0-9][0-9])
+      echo "WARNING: unit $unit still has the placeholder name '$name'." >&2
+      echo "         Edit $NAMES_FILE before this board is given away." >&2
+      name_note="placeholder-name"
+      ;;
+  esac
+
+  PLATFORMIO_BUILD_FLAGS="$build_flags" \
     pio run -e "$ENV_NAME" -t upload --upload-port "$port"
 
   serial="$(port_serial "$port")"
   if verify_hello "$port"; then
     echo "unit $unit verified: board greeted over serial"
-    printf '%s\t%s\t%s\tok\n' "$unit" "$serial" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> tools/fleet-log.tsv
+    printf '%s\t%s\t%s\t%s\t%s\n' "$unit" "$serial" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "$name_note" >> tools/fleet-log.tsv
   else
     echo "unit $unit FLASHED BUT DID NOT GREET. Set it aside." >&2
-    printf '%s\t%s\t%s\tno-greeting\n' "$unit" "$serial" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> tools/fleet-log.tsv
+    printf '%s\t%s\t%s\t%s\t%s\n' "$unit" "$serial" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name" "no-greeting" >> tools/fleet-log.tsv
   fi
 
   echo "unit $unit flashed. Unplug it."

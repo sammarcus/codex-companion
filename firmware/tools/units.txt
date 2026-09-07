@@ -1,0 +1,38 @@
+# codex-buddy unit names
+#
+# One name per line. Line N is unit N, counting only the lines below that are
+# not comments: the first non-comment line is unit 1, the second is unit 2, and
+# so on up to unit 14. Blank lines count too, so a blank line means "unit N has
+# no name" and holds that unit's slot open. Do not reorder the lines to insert
+# someone; edit the line for the unit you mean.
+#
+# tools/flash-all.sh reads this file and bakes the name into that board's
+# firmware as -DUNIT_NAME, next to -DUNIT_ID. The name shows on the boot screen
+# and is the headline on the ambient screen. A unit with no name here still
+# flashes fine; it just shows "UNIT NN" instead.
+#
+# Keep names short. The ambient headline is drawn in LovyanGFX Font2 across a
+# 320px panel, so roughly 24 characters is the practical ceiling before it
+# reaches the edges. First names, or first name plus initial, fit comfortably.
+#
+# Backslashes and double quotes are stripped by flash-all.sh before the name
+# reaches the compiler. Plain UTF-8 beyond ASCII will not render: the built-in
+# LovyanGFX bitmap fonts used here have no glyphs for it, so stick to ASCII.
+#
+# The 14 lines below are PLACEHOLDERS. Replace them before assembly day.
+# flash-all.sh prints a warning and marks the fleet log when it flashes a name
+# that still matches "Placeholder NN".
+Placeholder 01
+Placeholder 02
+Placeholder 03
+Placeholder 04
+Placeholder 05
+Placeholder 06
+Placeholder 07
+Placeholder 08
+Placeholder 09
+Placeholder 10
+Placeholder 11
+Placeholder 12
+Placeholder 13
+Placeholder 14
