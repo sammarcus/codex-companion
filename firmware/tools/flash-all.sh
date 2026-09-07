@@ -59,13 +59,73 @@ for d in json.load(sys.stdin):
 # esptool hard-resets the board when it is done, so the boot banner is on the
 # wire immediately after upload. Reading it proves the flash actually runs.
 verify_hello() {
-  local port="$1" out=""
-  stty -f "$port" 115200 raw -echo 2>/dev/null || return 1
-  out="$( (head -c 400 "$port" & sleep 6; kill %1 2>/dev/null) 2>/dev/null )"
-  case "$out" in
-    *"hello tdisplay-s3"*) return 0 ;;
-    *) printf 'saw instead: %s\n' "$out" >&2; return 1 ;;
-  esac
+  local port="$1"
+  # Self-contained: resets the board itself, then reads the greeting. Three
+  # things this has to work around, all found on real hardware:
+  #  1. `head -c N` blocks until N bytes arrive and the greeting is short, and
+  #     `kill %1` inside a command substitution is unreliable without job
+  #     control, so the old version could hang. This uses a hard deadline.
+  #  2. Opening the port after esptool has already reset the board misses the
+  #     greeting entirely, so we pulse DTR and RTS and read our own boot.
+  #  3. The device's USB CDC transmit runs one message behind: the greeting only
+  #     leaves the chip once another line is written. We nudge with `{}`, which
+  #     the firmware accepts and acks without changing any state.
+  # On success it echoes the greeting line, which carries the stored owner name
+  # and is the only external proof of what is actually on the unit.
+  python3 - "$port" <<'PY'
+import os, sys, time, struct, fcntl, termios
+
+port, want = sys.argv[1], "hello tdisplay-s3"
+try:
+    fd = os.open(port, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
+except OSError as e:
+    print("could not open %s: %s" % (port, e), file=sys.stderr)
+    sys.exit(1)
+
+def modem(op, mask):
+    fcntl.ioctl(fd, op, struct.pack("I", mask))
+
+try:
+    modem(termios.TIOCMBIC, termios.TIOCM_DTR)
+    modem(termios.TIOCMBIS, termios.TIOCM_RTS)
+    time.sleep(0.15)
+    modem(termios.TIOCMBIS, termios.TIOCM_DTR)
+    modem(termios.TIOCMBIC, termios.TIOCM_RTS)
+
+    deadline = time.time() + 12.0
+    seen = ""
+    last_nudge = 0.0
+    while time.time() < deadline:
+        now = time.time()
+        if now - last_nudge > 1.0 and want not in seen:
+            try:
+                os.write(fd, b"{}\n")
+            except OSError:
+                pass
+            last_nudge = now
+        try:
+            chunk = os.read(fd, 512)
+        except BlockingIOError:
+            time.sleep(0.05)
+            continue
+        except OSError as e:
+            print("read error: %s" % e, file=sys.stderr)
+            sys.exit(1)
+        if chunk:
+            seen += chunk.decode("utf-8", "replace")
+            if want in seen:
+                for line in seen.splitlines():
+                    if want in line:
+                        print(line.strip())
+                        sys.exit(0)
+        else:
+            time.sleep(0.05)
+
+    print("no greeting within 12s, last bytes: %r" % seen[-200:], file=sys.stderr)
+    sys.exit(1)
+finally:
+    os.close(fd)
+PY
 }
 
 wait_for_port() {
