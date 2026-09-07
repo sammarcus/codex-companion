@@ -1,282 +1,155 @@
 'use strict';
 
+/** Frame building: metrics in, one protocol line out, clamped to what fits. */
+
 const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  buildFrame,
-  frameLine,
-  framesEqual,
+  metricFields,
+  frameForEvent,
+  frameToLine,
   formatElapsed,
   pickQuotaWindow,
-  PULSE_RING
-} = require('../src/frame');
+  MAX_LINE_BYTES
+} = require('../codex-companion');
 
 const NOW = Date.parse('2026-09-07T04:30:00.000Z');
-/** resets_at values are Unix SECONDS, per RateLimitWindow. */
-const FUTURE = Math.floor(NOW / 1000) + 3600;
-const PAST = Math.floor(NOW / 1000) - 3600;
 
-test('formatElapsed table', () => {
-  const cases = [
-    [0, '0:00'],
-    [7, '0:07'],
-    [59, '0:59'],
-    [60, '1:00'],
-    [754, '12:34'],
-    [3599, '59:59'],
-    [3600, '1:00:00'],
-    [3723, '1:02:03'],
-    [-5, '0:00'],
-    [NaN, '0:00']
-  ];
-  for (const [input, want] of cases) {
-    assert.strictEqual(formatElapsed(input), want, `formatElapsed(${input})`);
-  }
+test('context fill drives the ring and the centre readout', () => {
+  const f = metricFields({ ctxFill: 0.62, elapsedSec: 754 }, NOW);
+  assert.strictEqual(f.label, 'CTX');
+  assert.strictEqual(f.ring, 0.62);
+  assert.strictEqual(f.center, '62%');
+  assert.strictEqual(f.sub, '12:34 elapsed');
 });
 
-test('buildFrame table', () => {
-  const cases = [
-    {
-      name: 'the protocol example from the spec, exactly',
-      state: { state: 'busy', ctxFill: 0.62, elapsedSec: 754, tps: 17.34 },
-      want: {
-        state: 'busy',
-        ring: 0.62,
-        center: '62%',
-        label: 'CTX',
-        sub: '12:34 elapsed',
-        tps: 17.3
-      }
-    },
-    {
-      name: 'no ctxFill falls back to a TIME label and the 0.15 pulse ring',
-      state: { state: 'busy', elapsedSec: 42 },
-      want: { state: 'busy', ring: PULSE_RING, center: '0:42', label: 'TIME', sub: '0:42 elapsed' }
-    },
-    {
-      name: 'no ctxFill and no elapsed still produces a valid frame',
-      state: { state: 'sleep' },
-      want: { state: 'sleep', ring: PULSE_RING, center: '--', label: 'TIME', sub: '' }
-    },
-    {
-      name: 'model fills sub when there is no elapsed time',
-      state: { state: 'idle', model: 'gpt-5-codex' },
-      want: { state: 'idle', ring: PULSE_RING, center: '--', label: 'TIME', sub: 'gpt-5-codex' }
-    },
-    {
-      name: 'ctxFill clamps above 1',
-      state: { state: 'busy', ctxFill: 1.4, elapsedSec: 10 },
-      want: { state: 'busy', ring: 1, center: '100%', label: 'CTX', sub: '0:10 elapsed' }
-    },
-    {
-      name: 'ctxFill clamps below 0',
-      state: { state: 'busy', ctxFill: -0.2, elapsedSec: 10 },
-      want: { state: 'busy', ring: 0, center: '0%', label: 'CTX', sub: '0:10 elapsed' }
-    },
-    {
-      name: 'an unknown state name degrades to sleep, never to garbage',
-      state: { state: 'exploding' },
-      want: { state: 'sleep', ring: PULSE_RING, center: '--', label: 'TIME', sub: '' }
-    },
-    {
-      name: 'tps of zero is omitted rather than sent as a lie',
-      state: { state: 'waiting', ctxFill: 0.34, elapsedSec: 71, tps: 0 },
-      want: {
-        state: 'waiting',
-        ring: 0.34,
-        center: '34%',
-        label: 'CTX',
-        sub: '1:11 elapsed'
-      }
-    },
-    {
-      name: 'a fresh quota snapshot with a future reset drives QUOTA mode',
-      state: {
-        state: 'idle',
-        rateLimits: {
-          observedAtMs: NOW - 60000,
-          primary: { used_percent: 41, window_minutes: 300, resets_at: FUTURE }
-        }
-      },
-      want: { state: 'idle', ring: 0.41, center: '41%', label: 'QUOTA', sub: '' }
-    },
-    {
-      name: 'ctxFill outranks a quota window that is nowhere near its limit',
-      state: {
-        state: 'busy',
-        ctxFill: 0.12,
-        elapsedSec: 5,
-        rateLimits: {
-          observedAtMs: NOW,
-          primary: { used_percent: 22, resets_at: FUTURE }
-        }
-      },
-      want: { state: 'busy', ring: 0.12, center: '12%', label: 'CTX', sub: '0:05 elapsed' }
-    },
-    {
-      // Both numbers arrive on the same TokenCountEvent, so gating QUOTA on
-      // "no context fill known" made the mode unreachable in practice.
-      name: 'a nearly exhausted quota takes the ring even though ctxFill is known',
-      state: {
-        state: 'busy',
-        ctxFill: 0.03,
-        elapsedSec: 5,
-        rateLimits: {
-          observedAtMs: NOW,
-          primary: { used_percent: 98.5, resets_at: FUTURE }
-        }
-      },
-      want: { state: 'busy', ring: 0.99, center: '99%', label: 'QUOTA', sub: '0:05 elapsed' }
-    },
-    {
-      name: 'a stale nearly exhausted quota is still refused, ctxFill stays on the ring',
-      state: {
-        state: 'busy',
-        ctxFill: 0.03,
-        elapsedSec: 5,
-        rateLimits: {
-          observedAtMs: NOW - 60 * 60 * 1000,
-          primary: { used_percent: 98.5, resets_at: FUTURE }
-        }
-      },
-      want: { state: 'busy', ring: 0.03, center: '3%', label: 'CTX', sub: '0:05 elapsed' }
-    },
-    {
-      name: 'a confirmed approval wait carries no guess marker',
-      state: { state: 'waiting', heuristic: false, ctxFill: 0.34, elapsedSec: 71 },
-      want: { state: 'waiting', ring: 0.34, center: '34%', label: 'CTX', sub: '1:11 elapsed' }
-    },
-    {
-      name: 'a stall-derived waiting guess is visibly marked as one',
-      state: { state: 'waiting', heuristic: true, ctxFill: 0.34, elapsedSec: 71 },
-      want: {
-        state: 'waiting',
-        ring: 0.34,
-        center: '34%',
-        label: 'CTX',
-        sub: '1:11 elapsed (guess)'
-      }
-    },
-    {
-      name: 'a waiting guess with nothing else to say still says it is a guess',
-      state: { state: 'waiting', heuristic: true },
-      want: {
-        state: 'waiting',
-        ring: PULSE_RING,
-        center: '--',
-        label: 'TIME',
-        sub: 'waiting? (guess)'
-      }
-    },
-    {
-      name: 'heuristic only marks the waiting state, never busy',
-      state: { state: 'busy', heuristic: true, ctxFill: 0.5, elapsedSec: 5 },
-      want: { state: 'busy', ring: 0.5, center: '50%', label: 'CTX', sub: '0:05 elapsed' }
-    },
-    {
-      name: 'a stale 100% quota never becomes a full static ring',
-      state: {
-        state: 'idle',
-        rateLimits: {
-          observedAtMs: NOW - 60 * 60 * 1000,
-          primary: { used_percent: 100, resets_at: FUTURE }
-        }
-      },
-      want: { state: 'idle', ring: PULSE_RING, center: '--', label: 'TIME', sub: '' }
-    },
-    {
-      name: 'a quota window whose reset has already passed is not shown',
-      state: {
-        state: 'idle',
-        rateLimits: {
-          observedAtMs: NOW,
-          primary: { used_percent: 100, resets_at: PAST }
-        }
-      },
-      want: { state: 'idle', ring: PULSE_RING, center: '--', label: 'TIME', sub: '' }
-    },
-    {
-      name: 'a quota snapshot with no observation time is not trusted',
-      state: {
-        state: 'idle',
-        rateLimits: { primary: { used_percent: 55, resets_at: FUTURE } }
-      },
-      want: { state: 'idle', ring: PULSE_RING, center: '--', label: 'TIME', sub: '' }
-    },
-    {
-      name: 'secondary window is used when primary is null',
-      state: {
-        state: 'idle',
-        rateLimits: {
-          observedAtMs: NOW,
-          primary: null,
-          secondary: { used_percent: 78.4, window_minutes: 10080, resets_at: FUTURE }
-        }
-      },
-      want: { state: 'idle', ring: 0.78, center: '78%', label: 'QUOTA', sub: '' }
-    }
-  ];
-
-  for (const c of cases) {
-    const got = buildFrame(c.state, { now: NOW });
-    assert.deepStrictEqual(got, c.want, c.name);
-  }
+test('with no context number the label falls back to the stopwatch', () => {
+  const f = metricFields({ ctxFill: null, elapsedSec: 42 }, NOW);
+  assert.strictEqual(f.label, 'TIME');
+  assert.strictEqual(f.center, '0:42');
 });
 
-test('quota mode can be disabled outright', () => {
-  const state = {
-    state: 'idle',
-    rateLimits: { observedAtMs: NOW, primary: { used_percent: 41, resets_at: FUTURE } }
-  };
-  assert.strictEqual(buildFrame(state, { now: NOW }).label, 'QUOTA');
-  assert.strictEqual(buildFrame(state, { now: NOW, allowQuota: false }).label, 'TIME');
+test('with nothing at all the centre is two dashes, never a fake zero', () => {
+  const f = metricFields({}, NOW);
+  assert.strictEqual(f.center, '--');
+  assert.strictEqual(f.label, 'TIME');
 });
 
-test('a fresh window with no resets_at is kept: the field is Option<i64>', () => {
-  const rl = { observedAtMs: NOW - 30000, primary: { used_percent: 41, resets_at: null } };
-  const picked = pickQuotaWindow(rl, NOW);
-  assert.ok(picked);
-  assert.strictEqual(picked.key, 'primary');
-  // Missing is unknown, not invalid. A reset time that has actually passed is
-  // still a rejection.
-  assert.strictEqual(
-    pickQuotaWindow({ observedAtMs: NOW, primary: { used_percent: 41, resets_at: PAST } }, NOW),
-    null
+test('a nearly exhausted quota window takes the ring away from CTX', () => {
+  const f = metricFields(
+    {
+      ctxFill: 0.2,
+      rateLimits: {
+        primary: { used_percent: 12 },
+        secondary: { used_percent: 97 },
+        observedAtMs: NOW - 1000
+      }
+    },
+    NOW
   );
+  assert.strictEqual(f.label, 'QUOTA');
+  assert.strictEqual(f.center, '97%');
+  assert.strictEqual(f.ring, 0.97);
 });
 
-test('pickQuotaWindow rejects a snapshot from the future', () => {
-  const rl = {
-    observedAtMs: NOW + 60 * 60 * 1000,
-    primary: { used_percent: 10, resets_at: FUTURE }
-  };
-  assert.strictEqual(pickQuotaWindow(rl, NOW), null);
-  assert.strictEqual(pickQuotaWindow(null, NOW), null);
-  assert.strictEqual(pickQuotaWindow({ observedAtMs: NOW }, NOW), null);
-});
-
-test('frameLine is one newline-terminated JSON object', () => {
-  const line = frameLine({ state: 'busy', ctxFill: 0.62, elapsedSec: 754, tps: 17.34 }, { now: NOW });
-  assert.strictEqual(
-    line,
-    '{"state":"busy","ring":0.62,"center":"62%","label":"CTX","sub":"12:34 elapsed","tps":17.3}\n'
+test('a comfortable quota window leaves CTX alone', () => {
+  const f = metricFields(
+    { ctxFill: 0.2, rateLimits: { primary: { used_percent: 30 }, observedAtMs: NOW } },
+    NOW
   );
-  assert.strictEqual(line.split('\n').length, 2);
-  assert.doesNotThrow(() => JSON.parse(line));
+  assert.strictEqual(f.label, 'CTX');
 });
 
-test('every state name in the spec survives a round trip', () => {
-  for (const s of ['sleep', 'idle', 'busy', 'waiting', 'done']) {
-    assert.strictEqual(buildFrame({ state: s }, { now: NOW }).state, s);
-  }
+test('a stale quota reading is never shown, so the ring cannot sit at a fake 100%', () => {
+  const stale = { primary: { used_percent: 100 }, observedAtMs: NOW - 60 * 60 * 1000 };
+  assert.strictEqual(pickQuotaWindow(stale, NOW), null);
+  const f = metricFields({ ctxFill: 0.1, rateLimits: stale }, NOW);
+  assert.strictEqual(f.label, 'CTX');
 });
 
-test('framesEqual compares only what the device renders', () => {
-  const a = buildFrame({ state: 'busy', ctxFill: 0.62, elapsedSec: 754 }, { now: NOW });
-  const b = buildFrame({ state: 'busy', ctxFill: 0.6249, elapsedSec: 754 }, { now: NOW });
-  const c = buildFrame({ state: 'idle', ctxFill: 0.62, elapsedSec: 754 }, { now: NOW });
-  assert.ok(framesEqual(a, b), 'rounding to 2dp makes these the same frame');
-  assert.ok(!framesEqual(a, c));
-  assert.ok(!framesEqual(a, null));
+test('a window whose reset time has already passed is discarded', () => {
+  const past = {
+    primary: { used_percent: 99, resets_at: Math.floor(NOW / 1000) - 60 },
+    observedAtMs: NOW
+  };
+  assert.strictEqual(pickQuotaWindow(past, NOW), null);
+});
+
+test('a fresh window with no stated reset time is still usable', () => {
+  const w = pickQuotaWindow({ primary: { used_percent: 55 }, observedAtMs: NOW }, NOW);
+  assert.ok(w);
+  assert.strictEqual(w.window.used_percent, 55);
+});
+
+test('formatElapsed rolls over into hours and pads', () => {
+  assert.strictEqual(formatElapsed(0), '0:00');
+  assert.strictEqual(formatElapsed(61), '1:01');
+  assert.strictEqual(formatElapsed(3723), '1:02:03');
+  assert.strictEqual(formatElapsed(-5), '0:00');
+  assert.strictEqual(formatElapsed(NaN), '0:00');
+});
+
+test('each hook event maps to exactly one device state', () => {
+  assert.strictEqual(frameForEvent('SessionStart', null, NOW).state, 'idle');
+  assert.strictEqual(frameForEvent('UserPromptSubmit', null, NOW).state, 'busy');
+  assert.strictEqual(frameForEvent('PreToolUse', null, NOW).state, 'busy');
+  assert.strictEqual(frameForEvent('PermissionRequest', null, NOW).state, 'waiting');
+  assert.strictEqual(frameForEvent('PostToolUse', null, NOW).state, 'busy');
+  assert.strictEqual(frameForEvent('Stop', null, NOW).state, 'done');
+  assert.strictEqual(frameForEvent('SessionEnd', null, NOW).state, 'idle');
+  assert.strictEqual(frameForEvent('Interrupt', null, NOW).state, 'idle');
+});
+
+test('an event we do not render produces no frame at all', () => {
+  assert.strictEqual(frameForEvent('SomethingNew', null, NOW), null);
+  assert.strictEqual(frameForEvent('', null, NOW), null);
+});
+
+test('the waiting frame names no tool and quotes no command', () => {
+  const f = frameForEvent('PermissionRequest', { ctxFill: 0.5 }, NOW);
+  assert.strictEqual(f.state, 'waiting');
+  assert.strictEqual(f.sub, 'your turn');
+});
+
+test('frameToLine clamps every field to the firmware buffer sizes', () => {
+  const line = frameToLine({
+    state: 'busy',
+    ring: 5,
+    center: '0123456789abcdefghij',
+    label: 'x'.repeat(40),
+    sub: 'y'.repeat(80),
+    tps: 17.34
+  });
+  const f = JSON.parse(line);
+  assert.strictEqual(f.ring, 1);
+  assert.strictEqual(f.center.length, 15);
+  assert.strictEqual(f.label.length, 23);
+  assert.strictEqual(f.sub.length, 39);
+  assert.strictEqual(f.tps, 17.3);
+  assert.ok(line.endsWith('\n'));
+});
+
+test('frameToLine drops an unknown state rather than sending a line the board discards', () => {
+  const f = JSON.parse(frameToLine({ state: 'thinking', ring: 0.5 }));
+  assert.strictEqual(f.state, undefined);
+  assert.strictEqual(f.ring, 0.5);
+});
+
+test('no frame this program can build exceeds the 512 byte line cap', () => {
+  const line = frameToLine({
+    state: 'waiting',
+    ring: 0.123456789,
+    center: 'x'.repeat(200),
+    label: 'y'.repeat(200),
+    sub: 'z'.repeat(200),
+    tps: 9999.99
+  });
+  assert.ok(Buffer.byteLength(line) <= MAX_LINE_BYTES, `line was ${Buffer.byteLength(line)} bytes`);
+});
+
+test('the metric-only frame carries no state, so the hook keeps owning it', () => {
+  const f = metricFields({ ctxFill: 0.4 }, NOW);
+  assert.strictEqual(f.state, undefined);
+  assert.strictEqual(JSON.parse(frameToLine(f)).state, undefined);
 });

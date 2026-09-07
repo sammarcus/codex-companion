@@ -1,221 +1,292 @@
 # codex-companion
 
-A small desk object that shows what your Codex CLI session is doing.
+Lights up a small screen on your desk when your Codex session needs you.
 
-A LILYGO T-Display-S3 sits on your desk. This package runs quietly on your Mac,
-watches `~/.codex/`, and streams the current state of your Codex session to the
-board over its USB cable. A colored ring, a number in the middle, a label.
+The device is a LILYGO T-Display-S3 on the end of a USB cable. It is already
+finished: plug it into any USB port and it runs its own ambient animation
+forever, with no host software at all. **This program is an optional bonus.**
+If you never install it, nothing is lost and the device still works.
 
-No WiFi. No account. No network of any kind. The board only ever hears what
-comes down the USB cable, and this helper only ever reads files Codex already
-writes to your own disk. Nothing is uploaded anywhere.
+If you do install it, the screen adds a ring showing how full your context
+window is and a colour showing what your Codex session is doing. The one that
+matters is the amber pulse: your agent is waiting on **you**, and you can see
+it from across the room without switching windows.
+
+---
+
+## The short version for whoever has to approve this
+
+| Question | Answer |
+|---|---|
+| How much code is there? | One file, `codex-companion.js`. There is no other source file. |
+| What does it depend on? | Nothing. Four Node built-ins: `fs`, `path`, `os`, `child_process`. |
+| Does it phone home? | No. It cannot: no networking module is loaded anywhere. |
+| Does it install a background service? | No launch agent, no daemon, no login item, no cron. |
+| Can it approve or deny a tool call? | No, for two independent reasons (below). |
+| What does it read from my session? | Two fields of the hook payload, plus numbers out of the session file Codex already writes. |
+| What does it write to my machine? | One file, `~/.codex/hooks.json`, and only when you run `install-hook`. |
+| Can I undo it? | `uninstall-hook`, then unplug the board. Nothing else was ever written. |
+
+Check every one of those yourself, from this directory:
+
+```bash
+ls
+# codex-companion.js, its tests, a README and a package.json. That is all.
+
+grep -n "require(" codex-companion.js
+# 4 lines: node:fs, node:path, node:os, node:child_process
+
+grep -nE "require\((.)(node:)?(http|https|net|tls|dns|dgram)" codex-companion.js
+grep -nE "fetch\(|XMLHttpRequest|WebSocket" codex-companion.js
+# both silent: it has no way to reach the network
+
+grep -niE "launchctl|launchagent|systemctl|crontab|plist|daemon" codex-companion.js
+# one hit, the comment that says it installs none of those
+
+grep -nE "tool_input|tool_response|last_assistant_message" codex-companion.js
+# comments only: those fields are named where the code says it ignores them
+
+node codex-companion.js install-hook --dry-run   # prints the file, writes nothing
+npm install                                      # "audited 1 package", because there is one
+npm test
+```
+
+---
 
 ## Install
 
-Requires Node 20 or newer (`node --version` to check).
-
-Plug the board into any USB port. The tarball that came with it is
-self-contained: `serialport` and its prebuilt binding are bundled inside it, so
-this installs with no network access at all.
+Node 20 or newer. macOS is the supported platform.
 
 ```bash
-npm install -g ./codex-companion-1.0.0.tgz
-codex-companion install
+node codex-companion.js doctor          # look before you leap
+node codex-companion.js install-hook    # prints the file, then writes it
 ```
 
-That copies the package to `~/.codex-companion/app`, sets it to start
-automatically when you log in, and starts the background service. You can close
-the terminal; it keeps running. `codex-companion` on its own does the install
-and then streams in the foreground too.
+`install-hook` prints the exact path and the exact bytes it is about to write,
+merges into an existing `hooks.json` instead of replacing it, and adds only its
+own matcher groups so removing them cannot disturb yours. Add `--dry-run` to
+print and write nothing.
 
-`codex-companion --help` and `codex-companion --version` print and exit; they
-change nothing.
-
-This package is not on the public npm registry, so nothing can fetch it by
-name: install from the tarball or from a checkout, never by package name. Build
-a fresh tarball with `npm pack` from this directory if you ever need one; it
-bundles the dependency, so the result installs offline.
-
-## What the display means
-
-**The ring** is how full your context window is, from Codex's own numbers, using
-Codex's own formula. Empty ring is a fresh session. Full ring means you are
-about to run out of room and should think about `/compact` or a new session.
-
-**The color** is what the agent is doing:
-
-| Color | State | Meaning |
-|---|---|---|
-| dim | `sleep` | nothing has happened for five minutes |
-| soft | `idle` | a session exists, no turn running |
-| slow breathing | `busy` | the agent is working |
-| **amber pulse** | `waiting` | it is waiting on **you** |
-| green flash | `done` | the turn just finished |
-
-The amber pulse is the one to care about. It gets faster the more work the
-agent had been doing, so a session that stops dead on an approval prompt gets
-visibly impatient at you from across the desk.
-
-Codex does not write approval prompts to disk, so most of the time `waiting` is
-inferred from a turn that has gone quiet. When it is inferred rather than
-observed, the bottom line ends in `(guess)`. An amber pulse with no `(guess)`
-means the approval request itself was seen.
-
-**The label** tells you what the number in the middle is:
-
-- `CTX` - percent of the context window used. This is the normal mode.
-- `TIME` - elapsed time on the current turn. Shown when Codex has not reported
-  any token accounting yet, which is normal for the first few seconds.
-- `QUOTA` - percent of your rate-limit window used. Takes the ring over from
-  `CTX` when a fresh rate-limit reading is at 80% or more, which is the point
-  where the quota, not the context window, is the number you need. It also
-  fills in when Codex has reported no token accounting at all. A reading older
-  than 15 minutes is never shown, and neither is a window whose reset time has
-  already passed, so the ring can never sit at a meaningless permanent 100%.
-
-`tps` is tokens per second, derived from the change in output tokens over wall
-time. It is an average across the interval, including time spent running
-commands, not an instantaneous rate.
-
-## Commands
-
-```
-codex-companion              install, then run in the foreground
-codex-companion run          stream live state to the device
-codex-companion install      install and enable autostart
-codex-companion uninstall    stop autostart and remove everything
-codex-companion status       is it installed, is it running
-codex-companion demo         cycle through every state, no Codex needed
-codex-companion doctor       ports, device match, session file, derived state
-```
-
-Useful flags:
-
-```
---port /dev/tty.usbmodemXXXX   skip auto-detection and use this port
---dry-run                      print frames to the terminal, open no port
---loop                         (demo) repeat forever
---codex-home /path             watch a different $CODEX_HOME
---no-heuristic                 never infer "waiting" from a stalled turn
---global                       (install) npm install -g this package (the local
-                               directory, never the registry: the name is not
-                               published) instead of copying into
-                               ~/.codex-companion/app. Needs a writable global
-                               npm prefix; without one, npm fails with EACCES
-                               and the plain install is the better option.
--h, --help                     print usage and exit, changing nothing
---version                      print the version and exit, changing nothing
-```
+Codex will not run a hook it has not been told to trust. The next time you
+start Codex it says **"Hooks need review"**; approve it there, or list hooks
+any time with the `/hooks` slash command. Until you do, the hook is registered
+and inert.
 
 ## Uninstall
 
 ```bash
-codex-companion uninstall
+node codex-companion.js uninstall-hook
 ```
 
-That stops the background service, removes the LaunchAgent, deletes
-`~/.codex-companion` and deletes `~/Library/Logs/codex-companion.log`. If it was
-installed with `--global` it also runs `npm uninstall -g codex-companion`.
-Unplug the board and you are back to where you started. Nothing is left in
-`~/.codex` because nothing was ever written there.
+It removes exactly the handlers it added, leaves anything else in the file
+alone, and deletes `hooks.json` entirely if it held nothing else. Then unplug
+the board. Nothing else was ever written anywhere.
+
+---
+
+## What it does
+
+### The hook path (the real one)
+
+Codex has a first-party hook system. `install-hook` registers this same file as
+a `command` handler for eight events, and each event sets one word on the
+screen:
+
+| Codex event | Screen |
+|---|---|
+| `SessionStart` | idle |
+| `UserPromptSubmit` | busy |
+| `PreToolUse` | busy |
+| `PermissionRequest` | **waiting** (amber pulse) |
+| `PostToolUse` | busy |
+| `Stop` | done (one green flash) |
+| `Interrupt` | idle |
+| `SessionEnd` | idle |
+
+Codex has no "permission resolved" event, so the amber pulse is cleared by
+whatever happens next, which is `PreToolUse`, `PostToolUse` or `Stop`. If you
+walk away instead, the device's own timers handle it: it dims after 30 seconds
+and returns to its ambient animation after five minutes.
+
+### The metrics path (numbers only)
+
+Hook payloads carry no token counts. The ring, the percentage in the middle and
+the stopwatch come from the session rollout file Codex is already writing to
+`~/.codex/sessions/`. That file is read, never written, and only these record
+types are parsed at all:
+
+```
+token_count  token_usage_record  compacted
+task_started  turn_started  task_complete  turn_complete  turn_aborted
+```
+
+Every other line, which is to say every line that carries your prompts, the
+model's replies, command output or file contents, is skipped by a substring
+test **before** `JSON.parse` ever sees it. See `METRIC_HINTS` and
+`isMetricLine`. Everything that survives into a frame is a number, a timestamp
+or one of five fixed state words. A test asserts this by walking the entire
+metrics object produced from a real captured session and failing if any value
+is a string.
+
+Context fill uses Codex's own baseline-adjusted formula, not `used / window`,
+so the percentage agrees with what the Codex TUI shows. When a rate-limit
+window is both fresh and at 80% or more, the ring switches to it and the label
+reads `QUOTA`, because at that point the quota, not the context window, is the
+number you need. A stale reading is never shown, so the ring can never sit at a
+meaningless permanent 100%.
+
+### What goes down the wire
+
+One JSON object per line, at 115200 baud. This is the whole protocol:
+
+```json
+{"state":"waiting","ring":0.62,"center":"62%","label":"CTX","sub":"your turn"}
+```
+
+`state` is one of `sleep`, `idle`, `busy`, `waiting`, `done`. `ring` is 0 to 1.
+`center`, `label` and `sub` are short strings this program clamps to 15, 23 and
+39 characters, matching the firmware's buffers. There is no other traffic in
+either direction, and the full specification is in `docs/protocol.md`.
+
+Note what is **not** in that line: no tool name, no command, no file path, no
+model name, no session id. The screen says that you are the one holding things
+up. Your terminal says what for.
+
+---
+
+## What it never does
+
+**It never approves or denies anything.** Two independent mechanisms, either
+one sufficient on its own:
+
+1. The hook writes nothing to stdout and exits 0. That is Codex's documented
+   way for a `PermissionRequest` handler to decline to decide and let the
+   normal approval flow continue
+   (`vendor/codex/codex-rs/hooks/src/events/permission_request.rs`, the module
+   comment and the `trimmed_stdout.is_empty()` branch of `parse_completed`).
+2. It is registered with `"async": true`. Codex only applies an allow or a deny
+   from a handler whose execution mode is `Sync`
+   (`hooks/src/engine/mod.rs`, `can_apply_control_effects`), so even a hook that
+   did print a verdict would be ignored.
+
+The approval prompt appears in your terminal and you answer it, exactly as you
+would with this program uninstalled.
+
+**It never blocks your session.** Every handler except `SessionEnd` is
+registered async, which Codex schedules and does not wait on
+(`hooks/src/engine/dispatcher.rs`). `SessionEnd` is the one event Codex always
+runs synchronously, with a hard 3-second cap, so it is registered with a
+2-second timeout. On top of that, every failure path inside this program is
+"do nothing and exit 0": no device, a busy port, a malformed payload, an
+unreadable session file, an outright bug. A test spawns the real hook for every
+event with the port pointed at a device that does not exist and asserts exit 0
+each time.
+
+**It never opens a network connection**, writes outside `~/.codex/hooks.json`,
+or starts anything that outlives the command you typed. The default command
+runs in the foreground and Ctrl-C ends it completely.
+
+---
+
+## Commands
+
+```
+codex-companion                 stream context metrics in the foreground
+codex-companion run             the same thing, named
+codex-companion hook            hook entry point: one payload on stdin
+codex-companion install-hook    print, then merge our handlers into hooks.json
+codex-companion uninstall-hook  remove exactly those handlers again
+codex-companion doctor          device, codex, hook registration, config traps
+codex-companion demo            drive every state, no Codex involved
+codex-companion help            usage
+```
+
+Options: `--port /dev/cu.usbmodemXXX`, `--codex-home /path`, `--dry-run`,
+`--loop` (demo), `--no-metrics` (hook: send state only, read no files).
+
+`run` is the no-install way to use the device: it polls the newest session file
+and sends only the metric fields, never `state`. Since any field may be
+omitted and the board keeps the last value it saw, running it alongside the
+hook composes rather than fights. On its own it gives you a live context ring
+with no hook installed at all.
+
+---
+
+## doctor
+
+`doctor` answers nearly every question in one screen:
+
+```
+node            v26.7.0 on darwin
+codex-companion /Users/you/helper/codex-companion.js
+
+serial ports    /dev/cu.usbmodem0054452, /dev/cu.usbmodem101
+device          /dev/cu.usbmodem101
+                /dev/cu.usbmodem101 reports USB 303a:1001
+handshake       acked our keepalive
+
+codex           codex-cli 0.153.4
+CODEX_HOME      /Users/you/.codex
+hooks.json      not present. Run: codex-companion install-hook
+
+approvals       nothing in config.toml suppresses approval prompts
+
+session         /Users/you/.codex/sessions/2026/09/07/rollout-....jsonl
+metrics         ctx (unknown), window 258400, turn closed
+frame           {"ring":0.15,"center":"0:06","label":"TIME","sub":"0:06 elapsed"}
+```
+
+(That is real output from a machine with the board plugged in and the hook not
+yet installed. `ctx (unknown)` means the last session's tail carried no token
+accounting, which is normal between sessions; the label falls back to `TIME`
+rather than inventing a percentage.)
+
+The `approvals` line is the one to read. If your `config.toml` sets
+`approval_policy = "never"`, `sandbox_mode = "danger-full-access"` or
+`approvals_reviewer = "auto_review"`, then Codex never raises an approval
+prompt, so the amber light can never appear and the device will look broken
+when it is working perfectly. `doctor` prints a warning naming the setting and
+the section it found it in. This is the single most common support question for
+software like this, which is why it is checked by name.
+
+---
 
 ## Troubleshooting
 
-**The display never changes / says nothing.**
-Run `codex-companion doctor`. It prints every serial port it can see, which one
-it picked, which session file it is reading, and the state it derived. That one
-command answers almost every question.
+**`device NOT FOUND`.** In order: the cable (a charge-only USB-C cable powers
+the board but carries no data, so no port ever appears), then the other USB
+port on the board, then `doctor`, which lists every serial port it can see. If
+a likely port is there but was not picked, name it: `--port /dev/cu.usbmodemXXX`.
 
-**`device NOT FOUND`.**
-The board did not turn up as a USB serial port. In order:
+**Two devices matched.** Auto-detection matches Espressif's USB vendor id
+`303a` and product id `1001`, read from `ioreg`. If two boards both match, it
+refuses to guess and asks for `--port`. That refusal is deliberate.
 
-1. Check the cable. A charge-only USB-C cable is the single most common cause;
-   it powers the board but carries no data, so no port ever appears.
-2. Try the other USB port on the board. The T-Display-S3 has two.
-3. Run `codex-companion doctor` and look at the port list. If you can see a
-   likely port but the matcher did not pick it, pass it explicitly:
-   `codex-companion run --port /dev/tty.usbmodemXXXX`.
+**The hook is registered but nothing happens.** Codex will not run an untrusted
+hook. Start Codex and approve the review prompt, or check `/hooks`.
 
-Auto-detection looks for Espressif's USB vendor id `303a` first, then falls back
-to matching Espressif/LILYGO/T-Display in the manufacturer string. If two boards
-are plugged in it picks one and tells you, and `--port` settles it.
+**It never shows amber.** See the `approvals` line in `doctor`.
 
-**`session (none found)`.**
-Codex has not written a session file yet. That is fine: the service keeps
-running and picks the file up the moment it appears. Run `codex` once, then
-re-run doctor. If you set `CODEX_HOME`, pass the same value with `--codex-home`.
+**The screen shows an old percentage.** The board keeps the last value it was
+sent, dims after 30 seconds without traffic and returns to its ambient
+animation after five minutes. Nothing is wrong.
 
-**It worked, then stopped after a `brew upgrade node` (or an `nvm` change).**
-The LaunchAgent names a specific node binary. `install` prefers a stable alias
-such as `/opt/homebrew/bin/node` and warns when it cannot find one. If it warned,
-re-run `codex-companion install` after any node upgrade.
-
-**It is stuck on `busy` and never shows amber.**
-Expected, if your Codex session runs with `approval_policy = "never"` (which is
-what `codex exec` uses by default). Such a session cannot ever be waiting for
-your approval, so the companion never claims it is.
-
-The reverse case is worth knowing about: Codex deliberately does **not** write
-approval prompts to the session file, so with any other approval policy the
-`waiting` state is inferred from a turn that has gone silent, not observed
-directly. It is a good guess, not a fact. `--no-heuristic` turns it off.
-
-**`npm warn install-scripts ... @serialport/bindings-cpp`.**
-Harmless, and you only see it when installing from a source checkout: the
-shipped tarball bundles the module already built. The prebuilt native binding is
-resolved when the module loads, not by that install script, and it covers Intel
-and Apple Silicon in one file. Nothing
-is compiled and no Xcode toolchain is needed. If serial really does fail to
-load, `npm rebuild @serialport/bindings-cpp` will build it from source (that
-one does need Xcode Command Line Tools).
-
-**Where are the logs?**
-`~/Library/Logs/codex-companion.log`.
-
-## Linux and Windows
-
-Primary support is macOS. The rest is best-effort.
-
-**Linux**: `install` writes a `systemd --user` unit and enables it. If opening
-the port fails with a permission error, add yourself to the serial group and log
-out and back in:
-
-```bash
-sudo usermod -a -G dialout "$USER"   # or the uucp group, on some distros
-```
-
-**Windows**: `install` prints the two steps to add a Startup shortcut. Windows
-10 and 11 bind the built-in CDC driver on their own, so the board should appear
-as a COM port with no driver install.
-
-## How it works
-
-The helper tails the newest `rollout-*.jsonl` under `$CODEX_HOME/sessions/`,
-which Codex flushes one whole line at a time. Turn boundaries come from the
-`task_started` / `task_complete` events, the context window size from
-`model_context_window`, and token totals from `token_count` and
-`token_usage_record`. Context fill uses Codex's own baseline-adjusted formula so
-the percentage agrees with what the Codex TUI shows.
-
-Each frame is one JSON object on one line at 115200 baud:
-
-```json
-{"state":"busy","ring":0.62,"center":"62%","label":"CTX","sub":"12:34 elapsed","tps":17.3}
-```
-
-Any field may be omitted, and the board keeps the last value it saw. A frame
-goes out when something changes, at most every 250 ms, and at least every 2
-seconds as a heartbeat. If the board hears nothing for 30 seconds it dims the
-last frame it had; after 5 minutes it sleeps. Unplug it and plug it back in and
-the helper reconnects on its own.
+---
 
 ## Development
 
 ```bash
-npm install
-npm test
+npm install   # installs nothing; there are no dependencies
+npm test      # 94 tests, node:test, no network, no serial port opened
 ```
 
-Tests are `node:test` with no extra dependencies, and none of them open a real
-serial port. The package name is recorded in `package.json`; `codex-companion`
-was verified free on the npm registry before it was chosen.
+The suite covers the `ioreg` parser and the refusal to guess between two
+boards, the frame builder and its clamps, the metrics reader against real
+captured session fixtures, the `hooks.json` merge and unmerge, and the hook
+itself end to end: a real child process, a realistic payload on stdin for each
+of the eight events, and the port pointed at an ordinary file so the exact
+bytes that would go on the wire are asserted, including that none of the
+payload leaked into them.
+
+Verified against real hardware: a T-Display-S3 on `/dev/cu.usbmodem101`
+accepted all eight event frames and acknowledged every one.

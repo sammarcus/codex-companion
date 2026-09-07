@@ -218,7 +218,8 @@ function readIoreg() {
     return execFileSync('/usr/sbin/ioreg', ['-r', '-c', 'IOUSBHostDevice', '-l', '-w0'], {
       encoding: 'utf8',
       timeout: 5000,
-      maxBuffer: 32 * 1024 * 1024
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore']
     });
   } catch {
     return '';
@@ -322,7 +323,12 @@ class Link {
     // stty opens its own descriptor, but termios state belongs to the device,
     // so configuring it while we hold the port open is what makes it stick.
     try {
-      execFileSync('/bin/stty', ['-f', this.path, BAUD, 'raw', '-echo'], { timeout: 5000 });
+      execFileSync('/bin/stty', ['-f', this.path, BAUD, 'raw', '-echo'], {
+        timeout: 5000,
+        // Never let a helper tool's noise reach our caller's stderr: a hook
+        // that chatters on stderr is a hook that looks like it failed.
+        stdio: ['ignore', 'ignore', 'ignore']
+      });
     } catch {
       // A port that will not take stty may still be perfectly writable; the
       // board ignores baud on native USB CDC anyway. Not worth failing over.
@@ -775,8 +781,9 @@ function numbersOnly(w) {
  */
 function metricsForHook(transcriptPath, nowMs, env) {
   try {
-    if (transcriptPath && typeof transcriptPath === 'string' && fs.existsSync(transcriptPath)) {
-      return readMetrics(transcriptPath, nowMs);
+    if (transcriptPath && typeof transcriptPath === 'string') {
+      // Named but unreadable: show no numbers rather than another session's.
+      return fs.existsSync(transcriptPath) ? readMetrics(transcriptPath, nowMs) : null;
     }
     const newest = newestRolloutFile(path.join(codexHome(env), 'sessions'));
     return newest ? readMetrics(newest.path, nowMs) : null;
@@ -858,9 +865,39 @@ function selfPath() {
   return __filename;
 }
 
+/**
+ * Candidate node binaries, best first. A hooks.json entry has to name a node
+ * binary, and naming the one we happen to be running names a version-specific
+ * path like /opt/homebrew/Cellar/node/26.7.0/bin/node, which stops working at
+ * the next `brew upgrade node`. A stable alias survives that.
+ */
+const NODE_ALIASES = ['/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node'];
+
+/**
+ * Pick the node binary to bake into hooks.json.
+ * @returns {{path:string, stable:boolean}}
+ */
+function stableNodePath(candidates) {
+  for (const candidate of candidates || NODE_ALIASES) {
+    try {
+      const v = execFileSync(candidate, ['--version'], {
+        encoding: 'utf8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore']
+      }).trim();
+      const major = Number((v.match(/^v(\d+)/) || [])[1]);
+      if (Number.isFinite(major) && major >= 20) return { path: candidate, stable: true };
+    } catch {
+      /* not there, or not runnable: try the next one */
+    }
+  }
+  return { path: process.execPath, stable: false };
+}
+
 /** The exact command string we register. */
 function hookCommand(nodeBin, script) {
-  return `${JSON.stringify(nodeBin || process.execPath)} ${JSON.stringify(script || selfPath())} hook`;
+  const node = nodeBin || stableNodePath().path;
+  return `${JSON.stringify(node)} ${JSON.stringify(script || selfPath())} hook`;
 }
 
 /** Our handler object for one event. */
@@ -971,7 +1008,8 @@ function cmdInstallHook(opts) {
     say(`${file} exists but is not valid JSON. Refusing to touch it.`);
     return 1;
   }
-  const command = hookCommand();
+  const node = stableNodePath();
+  const command = hookCommand(node.path);
   const { next, added } = mergeHooks(existing, command);
   const text = JSON.stringify(next, null, 2) + '\n';
 
@@ -987,8 +1025,13 @@ function cmdInstallHook(opts) {
   fs.writeFileSync(file, text);
   say(added.length ? `Registered for: ${added.join(', ')}` : 'Already registered; nothing changed.');
   say('');
-  say('Codex will not run a new hook until you approve it: start Codex and');
-  say('accept the hook review prompt. `codex-companion doctor` shows the state.');
+  if (!node.stable) {
+    say('Note: no stable node alias was found, so this names the exact binary');
+    say(`      ${node.path}. Re-run install-hook after upgrading node.`);
+    say('');
+  }
+  say('Codex will not run a new hook until you approve it. Start Codex: it');
+  say('prompts with "Hooks need review", and /hooks lists them at any time.');
   say('Undo all of this with `codex-companion uninstall-hook`.');
   return 0;
 }
@@ -1103,7 +1146,11 @@ function cmdDoctor(opts) {
   say('');
   let codexVersion = '(codex not on PATH)';
   try {
-    codexVersion = execFileSync('codex', ['--version'], { encoding: 'utf8', timeout: 10000 }).trim();
+    codexVersion = execFileSync('codex', ['--version'], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
   } catch {
     /* leave the default */
   }
@@ -1132,10 +1179,13 @@ function cmdDoctor(opts) {
   } catch {
     /* no config is a perfectly normal state */
   }
-  const trusted = /^\s*\[hooks\.state[.\]]/m.test(configText) || /trusted_hash/.test(configText);
-  say(
-    `hook trust      ${trusted ? 'config.toml has hook trust state; check the hook review in Codex if it never fires' : 'no trust state recorded yet: start Codex once and approve the hook review'}`
-  );
+  if (fs.existsSync(hooksPath)) {
+    const trusted = /^\s*\[hooks\.state[.\]]/m.test(configText) || /trusted_hash/.test(configText);
+    say(
+      `hook trust      ${trusted ? 'config.toml records hook trust; if the hook never fires, check /hooks in Codex' : 'not trusted yet: Codex will not run a new hook until you approve it'}`
+    );
+    say('                (Codex prompts at startup with "Hooks need review"; /hooks lists them)');
+  }
 
   // --- the number one support question
   say('');
@@ -1166,7 +1216,7 @@ function cmdDoctor(opts) {
         `, window ${m.contextWindow === null ? '(unknown)' : m.contextWindow}` +
         `, turn ${m.turnOpen ? 'open' : 'closed'}`
     );
-    say(`frame          ${frameToLine(metricFields(m, Date.now())).trim()}`);
+    say(`frame           ${frameToLine(metricFields(m, Date.now())).trim()}`);
   }
   return 0;
 }
@@ -1256,10 +1306,10 @@ async function cmdRun(opts) {
   return 0;
 }
 
+/** Deliberately not unref'd: this timer is what keeps the loop running. */
 function sleep(ms) {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    if (t.unref) t.unref();
+    setTimeout(resolve, ms);
   });
 }
 
@@ -1308,7 +1358,11 @@ function parseArgs(argv) {
 
 /** Everything user-facing goes to stdout here, except inside `hook`. */
 function say(s) {
-  process.stdout.write(`${s}\n`);
+  try {
+    process.stdout.write(`${s}\n`);
+  } catch {
+    /* the reader went away (`| head`), which is not our problem */
+  }
 }
 
 async function main(argv) {
@@ -1337,7 +1391,9 @@ async function main(argv) {
 }
 
 if (require.main === module) {
-  const isHook = process.argv.includes('hook');
+  // `codex-companion doctor | head` closes the pipe under us; that is normal.
+  process.stdout.on('error', () => {});
+  const isHook = parseArgs(process.argv.slice(2)).command === 'hook';
   Promise.resolve()
     .then(() => main(process.argv.slice(2)))
     .then((code) => {
@@ -1380,6 +1436,7 @@ module.exports = {
   // hooks.json
   hookCommand,
   hookHandler,
+  stableNodePath,
   isOurHandler,
   mergeHooks,
   unmergeHooks,
