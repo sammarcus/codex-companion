@@ -389,7 +389,7 @@ static void unitIdString(char* out, size_t cap) {
 #if UNIT_ID == 0
   uint8_t mac[6] = {0};
   esp_efuse_mac_get_default(mac);
-  snprintf(out, cap, "UNIT -- %02X%02X", (unsigned)mac[4], (unsigned)mac[5]);
+  snprintf(out, cap, "UNIT %02X%02X", (unsigned)mac[4], (unsigned)mac[5]);
 #else
   snprintf(out, cap, "UNIT %02d", (int)UNIT_ID);
 #endif

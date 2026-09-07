@@ -167,14 +167,20 @@ for unit in $(seq "$FIRST" "$LAST"); do
   fi
   echo "found $port"
 
-  # A stale build dir would silently reuse the previous unit's UNIT_ID, so
-  # force a clean object for the one translation unit that reads it.
-  rm -f ".pio/build/${ENV_NAME}/src/main.cpp.o"
-
-  # One image for the whole fleet: UNIT_ID is the only per-board flag.
-  build_flags="-DUNIT_ID=${unit}"
-
-  PLATFORMIO_BUILD_FLAGS="$build_flags" \
+  # Every unit gets the byte-identical image. Nothing is compiled per board,
+  # so there is one binary and one hash for the whole fleet, which is what
+  # makes "here is the source, here is the hash, dump your own board and
+  # compare" an honest claim rather than a fourteen-way asterisk.
+  #
+  # Units still identify themselves: with no -DUNIT_ID the firmware derives a
+  # label from the chip's own MAC, so each board shows a distinct id without
+  # anything being stamped in at build time. The counter below is only the
+  # operator's place in the run, for the fleet log.
+  #
+  # -DUNIT_ID is still honoured if someone wants numbered units; set
+  # UNIT_BUILD_FLAGS to pass it, and accept that each unit then has its own
+  # binary and its own hash.
+  PLATFORMIO_BUILD_FLAGS="${UNIT_BUILD_FLAGS:-}" \
     pio run -e "$ENV_NAME" -t upload --upload-port "$port"
 
   serial="$(port_serial "$port")"

@@ -1,7 +1,7 @@
 {
   "name": "codex-companion",
-  "version": "1.0.0",
-  "description": "Desk companion for the OpenAI Codex CLI: streams live agent state from ~/.codex over USB serial to a LILYGO T-Display-S3.",
+  "version": "2.0.0",
+  "description": "Desk companion for the OpenAI Codex CLI: one dependency-free file that lights a LILYGO T-Display-S3 from Codex's own hook events.",
   "keywords": [
     "codex",
     "esp32-s3",
@@ -12,28 +12,19 @@
   ],
   "license": "MIT",
   "type": "commonjs",
-  "main": "index.js",
+  "main": "codex-companion.js",
   "bin": {
-    "codex-companion": "bin/codex-companion.js"
+    "codex-companion": "codex-companion.js"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.js\"",
-    "start": "node bin/codex-companion.js run"
+    "test": "node --test test/",
+    "start": "node codex-companion.js run"
   },
   "files": [
-    "index.js",
-    "bin/",
-    "src/",
-    "templates/",
+    "codex-companion.js",
     "README.md"
-  ],
-  "dependencies": {
-    "serialport": "^13.0.0"
-  },
-  "bundleDependencies": [
-    "serialport"
   ]
 }
