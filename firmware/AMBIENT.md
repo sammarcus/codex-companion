@@ -91,10 +91,13 @@ the ack.
 
 The recipients' names are not known at flash time, so the name is **runtime
 state stored on the device**, not a build flag. All 14 boards flash from one
-identical image; the only per-board build flag is `-DUNIT_ID`, whose behaviour
-is unchanged (still unset in `platformio.ini`, still defaulted to 0 in
-`main.cpp`, and 0 still renders as `UNIT -- <MAC suffix>` rather than a
-`UNIT 00` that would read like a real serial number).
+byte-identical image, and there is **no per-board build flag at all** on the
+batch path. `-DUNIT_ID` still exists but is unset in `platformio.ini`, is not
+passed by `tools/flash-all.sh`, and defaults to 0 in `main.cpp`; at 0 the label
+is derived from the last two bytes of the chip's efuse MAC and renders as
+`UNIT AB12` (`snprintf(out, cap, "UNIT %02X%02X", mac[4], mac[5])`), rather
+than a `UNIT 00` that would read like a real serial number on a batch of 14
+identical boards.
 
 ### Setting the name
 
@@ -144,14 +147,19 @@ PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex Rivera\""' pio run
 
 The quotes are part of the macro body, and PlatformIO shlex-splits the
 environment variable, which is why the inner pair has to be backslash-escaped.
-`tools/flash-all.sh` does not set this flag at all.
+`tools/flash-all.sh` does not set either flag; it passes
+`PLATFORMIO_BUILD_FLAGS="${UNIT_BUILD_FLAGS:-}"`, which is empty unless you
+export `UNIT_BUILD_FLAGS` yourself, and any unit built that way has its own
+binary and its own hash.
 
-Unset is the normal configuration, not an error:
+Unset is the normal configuration, not an error. The unit id below is the MAC
+label every fleet board actually shows, since nothing on the batch path sets
+`UNIT_ID`:
 
 | | Boot screen | Ambient screen |
 |---|---|---|
-| Name set | `codex companion` / **Alex Rivera** / `UNIT 03` | **Alex Rivera** / `codex companion` |
-| No name | `codex companion` / `UNIT 03` | `codex companion` / `UNIT 03` |
+| Name set | `codex companion` / **Alex Rivera** / `UNIT AB12` | **Alex Rivera** / `codex companion` |
+| No name | `codex companion` / `UNIT AB12` | `codex companion` / `UNIT AB12` |
 
 The unit id is still on the boot screen even when a name is set, so
 assembly-day identification never depends on remembering who got which name.
@@ -181,27 +189,53 @@ hello tdisplay-s3 v1 name="Alex Rivera"
 ```
 
 The `hello tdisplay-s3 v1` prefix is byte-for-byte what it was. The host helper
-matches `/hello\s+tdisplay-s3/i` (`helper/src/device.js:47`) and
-`tools/flash-all.sh` globs `*"hello tdisplay-s3"*`; both are substring tests,
-so the suffix is invisible to them. It exists so a host can read back what a
-`name` line actually did, and so persistence across a power cycle is provable
-over the wire instead of by eye. Always quoted, so an unnamed board is an
-unambiguous `name=""`.
+tests `/hello\s+tdisplay-s3/i` in `cmdDoctor`
+(`helper/codex-companion.js:1131`, the `handshake` line), and
+`tools/flash-all.sh`'s `verify_hello` tests `"hello tdisplay-s3" in seen`; both
+are substring tests, so the suffix is invisible to them.
+
+The helper does not use the greeting to *find* the board. Discovery is
+`readIoreg` / `parseIoreg` / `choosePort` in the same file, keyed on
+`ESP_VENDOR_ID` `0x303a` and `ESP_PRODUCT_ID` `0x1001`; the greeting is only a
+liveness check once a port has been chosen. `doctor` also pulls the name back
+out of it with `/name="([^"]*)"/` and prints it as `board name`.
+
+The suffix exists so a host can read back what a `name` line actually did, and
+so persistence across a power cycle is provable over the wire instead of by
+eye. Always quoted, so an unnamed board is an unambiguous `name=""`.
 
 ### `tools/flash-all.sh`
 
-Unchanged behaviour, all still in place: it matches the board by USB hwid
-`303A:1001` rather than by first-`/dev/cu.usbmodem*` (there were two other USB
-serial devices attached to this machine during testing, so that filter earns
-its keep), removes the stale `main.cpp.o` so a build cannot reuse the previous
-unit's flags, uploads, and verifies by reading `hello tdisplay-s3` back off the
-port before logging the unit as good.
+What it does now, read from the script: it matches the board by USB hwid
+`303A:1001` out of `pio device list --json-output` rather than by
+first-`/dev/cu.usbmodem*` (there were two other USB serial devices attached to
+this machine during testing, so that filter earns its keep), builds and uploads
+with `PLATFORMIO_BUILD_FLAGS="${UNIT_BUILD_FLAGS:-}"`, and verifies by reading
+`hello tdisplay-s3` back off the port before logging the unit as good.
 
-What changed: it no longer reads, needs, or accepts names. `tools/units.txt`
-and the `NAMES_FILE` override are gone, along with the placeholder-name warning
-they existed to support, because there is no longer a name that can be baked in
-wrong. `tools/fleet-log.tsv` is back to four columns: unit, USB serial, UTC
-timestamp, and `ok` / `no-greeting`.
+`verify_hello` is self-contained: it opens the port, pulses DTR and RTS to
+reset the board itself, then reads for up to 12 seconds while writing a bare
+`{}` about once a second, because the device's USB CDC transmit runs one
+message behind and will otherwise sit on the greeting. `{}` is the protocol's
+no-op keepalive, so the nudge cannot change any state on the board it is
+checking. On success it echoes the greeting line, name and all.
+
+What changed, and what is **not** in the script any more:
+
+- It no longer passes `-DUNIT_ID` or any other per-board flag. Every unit is
+  flashed from the byte-identical image, so there is one binary and one hash
+  for the whole fleet. The `UNIT n of LAST` counter is the operator's place in
+  the run, for the log, and is not compiled into anything.
+- It no longer force-removes `main.cpp.o`. That existed only to stop a build
+  reusing the previous unit's `UNIT_ID`, and with no per-unit flag there is
+  nothing stale to clear.
+- It no longer reads, needs, or accepts names. `tools/units.txt` and the
+  `NAMES_FILE` override are gone, along with the placeholder-name warning they
+  existed to support, because there is no longer a name that can be baked in
+  wrong.
+
+`tools/fleet-log.tsv` is four columns: unit, USB serial, UTC timestamp, and
+`ok` / `no-greeting`.
 
 ### One more serial-port note
 

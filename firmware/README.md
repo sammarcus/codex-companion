@@ -4,8 +4,12 @@ Firmware for the Codex Desk Companion: a LILYGO T-Display-S3 (ESP32-S3, 16MB
 flash, 8MB PSRAM, ST7789 170x320 8-bit parallel, native USB CDC) that shows a
 live OpenAI Codex CLI session as a colour ring plus centre text.
 
-No WiFi, no accounts, no pairing. A Node host helper tails `~/.codex/` and
-streams newline-delimited JSON over USB serial at 115200.
+No WiFi, no accounts, no pairing. An optional Node host helper
+(`../helper/codex-companion.js`, one file, no dependencies) streams
+newline-delimited JSON over USB serial at 115200. It gets its state from
+Codex's own first-party hook events and reads the session rollout file only
+for numbers. The device is complete without it: with no host talking to it it
+runs ambient mode forever.
 
 ## Layout
 
@@ -15,7 +19,7 @@ streams newline-delimited JSON over USB serial at 115200.
 | `src/LGFX_TDisplayS3.hpp` | LovyanGFX device config (Bus_Parallel8 + Panel_ST7789 + Light_PWM) |
 | `src/main.cpp` | protocol parser, state machine, ring renderer |
 | `tools/sim.py` | streams a demo protocol sequence at a board over serial |
-| `tools/flash-all.sh` | flashes units 1..14 from one image, stamping only `UNIT_ID` |
+| `tools/flash-all.sh` | flashes units 1..14, every one from the byte-identical image |
 | `AMBIENT.md` | ambient mode, owner name, button behaviour |
 
 Pins, panel offsets and invert flags all come from `../docs/hardware-recon.md`,
@@ -50,42 +54,41 @@ cd firmware
 pio run
 ```
 
-Build one unit's image with its serial number baked in:
+That is the whole build, for one board or for all fourteen. **There is no
+per-unit build.** Every unit is flashed from the byte-identical image, so the
+fleet has one binary and one hash. Nothing is stamped in at compile time:
+neither the owner name nor the unit number.
 
-```sh
-PLATFORMIO_BUILD_FLAGS="-DUNIT_ID=3" pio run
-```
+Units still tell themselves apart. With `UNIT_ID` unset, `src/main.cpp` derives
+the label from the chip's own efuse MAC and the boot screen reads `UNIT AB12`,
+where `AB12` is the last two bytes (`mac[4]`, `mac[5]`). It has to be that end
+of the address: the first three bytes are the Espressif OUI and are identical
+across the whole batch, so a suffix taken from there would print the same
+digits on all 14 boards. A `UNIT 00` was deliberately avoided, since it would
+read like a real serial number.
 
-That is the whole per-board build. Owner names are **not** a build input: all
-14 boards flash from one identical image and are named afterwards over the
-wire, with a protocol line carrying `"name"`, which the device stores in NVS.
-See "Naming a unit" below.
+Owner names are set afterwards over the wire, with a protocol line carrying
+`"name"`, which the device stores in NVS. See "Naming a unit" below.
 
-`-DUNIT_NAME` still exists, but only as a build-time **default** for anyone who
-does want one baked in:
+Both build flags still exist for anyone who wants them, and neither is on the
+batch path:
 
 ```sh
 PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex Rivera\""' pio run
 ```
 
-The quotes are part of the macro body and PlatformIO shlex-splits the
-environment variable, which is why the inner pair is escaped.
-`tools/flash-all.sh` does not set it.
+`-DUNIT_ID=<n>` renders `UNIT 03` instead of the MAC label. `-DUNIT_NAME` is a
+build-time **default** owner name, outranked by anything stored in NVS. The
+quotes around the name are part of the macro body and PlatformIO shlex-splits
+the environment variable, which is why the inner pair is escaped.
 
 `UNIT_ID` is not set in `platformio.ini` on purpose, and the environment
-variable appends to (does not replace) the project's own build flags, so a
-per-unit build keeps `BOARD_HAS_PSRAM` and the USB CDC flags intact.
-
-A build with no `UNIT_ID` is not stamped `UNIT 00`, which would look like a
-real serial number on a batch of 14 identical boards. `src/main.cpp` treats
-`UNIT_ID == 0` as unset and the boot screen reads `UNIT -- <MAC>`, where
-`<MAC>` is the last two bytes of the efuse MAC (`mac[4]`, `mac[5]`), so an
-unstamped board is both obviously unstamped and still distinguishable from its
-neighbours. It has to be that end of the address: the first three bytes are the
-Espressif OUI and are identical across the whole batch, so a suffix taken from
-there would print the same digits on all 14 boards.
-`tools/flash-all.sh` injects `-DUNIT_ID=<n>` for units 1..14, so the batch path
-never hits this.
+variable appends to (does not replace) the project's own build flags, so such a
+build keeps `BOARD_HAS_PSRAM` and the USB CDC flags intact. Use either flag and
+you accept that the unit now has its own binary and its own hash, which is why
+`tools/flash-all.sh` sets neither. It passes
+`PLATFORMIO_BUILD_FLAGS="${UNIT_BUILD_FLAGS:-}"`, empty unless you deliberately
+export `UNIT_BUILD_FLAGS` yourself.
 
 ## Flash
 
@@ -96,20 +99,37 @@ pio run -t upload                       # auto-detects the port
 pio run -t upload --upload-port /dev/cu.usbmodem1101
 ```
 
-All 14 units, one at a time, prompting for a board swap between each. No names
-are needed or accepted: every board gets the same image, and `-DUNIT_ID=<n>` is
-the only thing that varies.
+All 14 units, one at a time, prompting for a board swap between each. Nothing
+varies between boards: no names, no unit numbers, nothing per-unit at all.
+Every board gets the same image, so after unit 1 the build is a cache hit and
+each later unit costs upload time only.
 
 ```sh
 ./tools/flash-all.sh          # units 1..14
 ./tools/flash-all.sh 5 8      # units 5..8 only
 ```
 
-It matches the board by USB hwid `303A:1001` rather than by first
-`/dev/cu.usbmodem*`, removes the stale `main.cpp.o` so a build cannot reuse the
-previous unit's `UNIT_ID`, uploads, verifies the greeting off the port, and
-appends a row to `tools/fleet-log.tsv` (unit, USB serial, UTC timestamp,
-`ok` / `no-greeting`).
+Per unit it waits up to 120s for a port whose `pio device list --json-output`
+hwid contains `303A:1001` (not a first-`/dev/cu.usbmodem*` glob, which would
+happily pick a USB power meter), builds and uploads with
+`PLATFORMIO_BUILD_FLAGS="${UNIT_BUILD_FLAGS:-}"`, verifies the greeting off the
+port, and appends a row to `tools/fleet-log.tsv` (unit, USB serial, UTC
+timestamp, `ok` / `no-greeting`). The greeting check resets the board itself by
+pulsing DTR and RTS, then reads for up to 12 seconds while nudging with a bare
+`{}` about once a second, because the device's transmit path runs one message
+behind (see the known quirk under "Protocol"). On success it echoes the
+greeting line, so the stored owner name is readable straight off the terminal.
+
+The number in `UNIT n of LAST` is only the operator's place in the run, for the
+log. It is not compiled into anything.
+
+Two failure modes worth knowing before flash day: it **aborts the whole run**
+if no board appears within 120s, so run it in sub-ranges (`1 5`, `6 10`,
+`11 14`) rather than letting a flaky cable at unit 9 end the afternoon
+(`fleet-log.tsv` is append-only, so resuming loses nothing). And `find_port`
+takes the **first** `303A:1001` match, so unplug every other ESP32-S3 first:
+any of them enumerates under the same id and the same generic
+`USB JTAG/serial debug unit` description.
 
 If a board will not enter download mode: hold **BOOT** (button 1, GPIO 0),
 tap **RST**, release BOOT, then run the upload.
@@ -178,8 +198,20 @@ python3 tools/sim.py                    # auto-picks /dev/cu.usbmodem*
 python3 tools/sim.py --port /dev/cu.usbmodem1101 --loop
 ```
 
-Needs `pyserial` (`python3 -m pip install --user pyserial`). Or poke a single
-frame at it:
+Needs `pyserial` (`python3 -m pip install --user pyserial`), which is not
+installed on this machine today. Note that `sim.py` picks
+`sorted(glob("/dev/cu.usbmodem*"))[0]` when given no `--port`, which on a
+crowded bus resolves to whatever sorts first, not to the board. Pass `--port`.
+
+`sim.py` also sends `APPROVE` and `DONE` as labels, which the real host helper
+never does, so for at least one unit drive it with the helper instead. That
+needs nothing installed:
+
+```sh
+node ../helper/codex-companion.js demo --port /dev/cu.usbmodem1101 --loop
+```
+
+Or poke a single frame at it:
 
 ```sh
 printf '{"state":"waiting","ring":0.62,"center":"62%%","label":"CTX","sub":"12:34 elapsed","tps":17.3}\n' \

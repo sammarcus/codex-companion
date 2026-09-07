@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Flash all 14 Codex Desk Companion units, stamping each with its UNIT_ID.
+# Flash all 14 Codex Desk Companion units from one byte-identical image.
 #
 # No names are needed here, and none can be given here. Every board flashes
 # from one identical image; the only thing that varies between them is

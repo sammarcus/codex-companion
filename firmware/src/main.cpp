@@ -375,7 +375,7 @@ static StateId parseStateName(const char* s, bool* ok) {
   return st.state;
 }
 
-// "UNIT 03", or "UNIT -- AB12" when UNIT_ID was never injected.
+// "UNIT 03", or "UNIT AB12" when UNIT_ID was never injected.
 //
 // The MAC suffix must come from the LAST two bytes (mac[4], mac[5]), which are
 // the per-device half. The first three are the Espressif OUI and are identical
@@ -870,10 +870,11 @@ static void drawBootScreen() {
   gfx->setTextSize(1);
   gfx->drawString(PRODUCT_NAME, SCREEN_W / 2, 70);
 
-  // UNIT_ID is never injected on the plain `pio run -t upload` path, so
-  // unitIdString() renders "UNIT -- <MAC>" there rather than a "UNIT 00" that
-  // would read like a real serial number. See its comment for why the suffix
-  // has to come from the tail of the MAC.
+  // UNIT_ID is never injected on the plain `pio run -t upload` path, nor by
+  // tools/flash-all.sh, which flashes every unit from the byte-identical
+  // image. unitIdString() therefore renders "UNIT <MAC>" rather than a
+  // "UNIT 00" that would read like a real serial number. See its comment for
+  // why the suffix has to come from the tail of the MAC.
   char unit[24];
   unitIdString(unit, sizeof(unit));
 
