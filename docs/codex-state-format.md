@@ -455,7 +455,7 @@ means "this turn ended", not "the session ended". An interactive session goes ba
   recent `token_usage_record.payload.thread_token_usage.total_tokens`.
 
   Codex's own formula is **not** `used/W`. From `TokenUsage::percent_of_context_window_remaining`
-  (`protocol.rs:2428`) with `BASELINE_TOKENS = 12000` (`protocol.rs:2413`):
+  (`protocol.rs:2428`) with `BASELINE_TOKENS = 12000` (`protocol.rs:2394`):
 
   ```
   if W <= 12000: remaining_pct = 0
@@ -666,7 +666,7 @@ Everything here is either untested on this machine or inferred. None of it shoul
 | `TokenCountEvent` | `protocol/src/protocol.rs:2318` |
 | `RateLimitSnapshot` | `protocol/src/protocol.rs:2324` |
 | `RateLimitWindow` | `protocol/src/protocol.rs:2367` |
-| `BASELINE_TOKENS = 12000` | `protocol/src/protocol.rs:2413` |
+| `BASELINE_TOKENS = 12000` | `protocol/src/protocol.rs:2394` |
 | `percent_of_context_window_remaining` | `protocol/src/protocol.rs:2428` |
 | `SessionContextWindow` (window_id, not size) | `protocol/src/protocol.rs:3007` |
 | `SessionMeta` | `protocol/src/protocol.rs:3040` |
