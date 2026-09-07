@@ -51,8 +51,19 @@ const DEFAULTS = {
   idleMs: 30 * 1000,
   /** no events for this long, with no turn open -> sleep */
   sleepMs: 5 * 60 * 1000,
-  /** open turn silent for this long -> maybe waiting on a human (heuristic) */
-  stallMs: 45 * 1000,
+  /**
+   * Open turn silent for this long -> maybe waiting on a human (heuristic).
+   *
+   * docs/codex-state-format.md section 6 sets the floor: "STALL_S should be
+   * generous (60-120 s). Long model turns and long tool calls emit nothing to
+   * the JSONL ... Silence is not evidence of being stuck." exec_command_begin,
+   * exec_command_end, item_started and every *_delta are classified transient
+   * by rollout/src/policy.rs, so an npm install, a test run or a long reasoning
+   * turn writes zero durable lines for its whole duration. 90s sits in the
+   * middle of the documented band and survives a typical build, so the amber
+   * pulse stays the thing it is for: the agent actually blocked on a human.
+   */
+  stallMs: 90 * 1000,
   /** open turn silent for this long -> the turn is stale, stop claiming busy */
   staleTurnMs: 15 * 60 * 1000,
   /**
@@ -331,7 +342,11 @@ class SessionState {
     }
 
     if (kind === 'turn_aborted') {
-      this._closeTurn(p, at);
+      // TurnAbortedEvent (protocol/src/protocol.rs:4154) carries the same
+      // started_at / completed_at / duration_ms as TurnCompleteEvent, so the
+      // only thing separating a Ctrl-C from a success is this flag. Without it
+      // an interrupt lights the green done flash on the recipient's desk.
+      this._closeTurn(p, at, true);
       this.lastTurnAborted = typeof p.reason === 'string' ? p.reason : 'aborted';
       this.lastEventMs = at;
       return;
@@ -396,9 +411,25 @@ class SessionState {
     }
   }
 
-  _closeTurn(p, at) {
+  /**
+   * Close the open turn.
+   *
+   * @param {object} p     the event payload
+   * @param {number} at    envelope time, used when the payload has no clock
+   * @param {boolean} [aborted] true for turn_aborted
+   *
+   * `lastTurnCompletedAtMs` is what derive() reads as "the green done flash",
+   * so only a turn that actually completed may set it. An aborted turn keeps
+   * its duration (the stopwatch is still true) and falls through to idle: the
+   * turn is over and nothing succeeded.
+   */
+  _closeTurn(p, at, aborted) {
     this.openTurnId = null;
-    this.lastTurnCompletedAtMs = Number.isFinite(p.completed_at) ? p.completed_at * 1000 : at;
+    this.lastTurnCompletedAtMs = aborted
+      ? null
+      : Number.isFinite(p.completed_at)
+        ? p.completed_at * 1000
+        : at;
     if (Number.isFinite(p.duration_ms)) {
       this.lastTurnDurationSec = p.duration_ms / 1000;
     } else if (Number.isFinite(p.started_at) && Number.isFinite(p.completed_at)) {
@@ -414,7 +445,7 @@ class SessionState {
    */
   derive(nowMs, haveFile) {
     const o = this.opts;
-    const ctxFill = contextFill(this.contextTokens, this.contextWindow);
+    let ctxFill = contextFill(this.contextTokens, this.contextWindow);
 
     const lastActivityMs = this.lastEventMs !== null ? this.lastEventMs : this.lastLineMs;
     const age = lastActivityMs === null ? Infinity : Math.max(0, nowMs - lastActivityMs);
@@ -460,7 +491,12 @@ class SessionState {
       state = 'idle';
     }
 
-    // A sleeping board must not display the previous turn's frozen stopwatch.
+    // A sleeping board must not display the previous turn's frozen stopwatch,
+    // and for the same reason it must not keep yesterday's context ring: after
+    // five silent minutes the percentage is a number the helper can no longer
+    // vouch for. Blank both and let the frame fall back to "--".
+    if (state === 'sleep') ctxFill = null;
+
     let elapsedSec = null;
     if (state !== 'sleep') {
       if (this.openTurnId && Number.isFinite(this.turnStartedAtMs)) {
@@ -602,6 +638,7 @@ class CodexWatcher extends EventEmitter {
     this._lastSnapshot = null;
     this._busy = false;
     this._rescanQueued = true;
+    this._lastRescanMs = -Infinity;
     this._stopped = true;
   }
 
@@ -640,7 +677,13 @@ class CodexWatcher extends EventEmitter {
   _startFsWatch() {
     // fs.watch on a missing dir throws; the rescan timer covers that case.
     try {
-      this._fsWatcher = fs.watch(this.sessionsDir, { recursive: true }, () => {
+      this._fsWatcher = fs.watch(this.sessionsDir, { recursive: true }, (_event, name) => {
+        // Every append to the rollout we are already tailing fires here, and a
+        // rescan stats every rollout file under sessions/ (a dogfooding user
+        // accumulates thousands). Queuing on our own file collapsed rescanMs
+        // to the 250 ms poll rate and burned ~24% of a core while Codex wrote.
+        // The tailer already sees those bytes via the size check in _readNew.
+        if (this._isCurrentFileEvent(name)) return;
         this._rescanQueued = true;
       });
       this._fsWatcher.on('error', () => {
@@ -657,9 +700,33 @@ class CodexWatcher extends EventEmitter {
     }
   }
 
+  /**
+   * True when an fs.watch event names the rollout file we are already tailing.
+   * fs.watch reports a path relative to sessionsDir, so compare basenames;
+   * rollout names carry a uuid and do not collide across day directories.
+   * A null filename (possible on some platforms) is treated as "not ours",
+   * because a missed rotation costs more than one extra rescan.
+   */
+  _isCurrentFileEvent(name) {
+    if (!this.currentFile || typeof name !== 'string' || !name) return false;
+    return path.basename(name) === path.basename(this.currentFile);
+  }
+
+  /**
+   * Rescans stat every rollout file under sessions/, which on a dogfooding
+   * user's tree is thousands of files and ~120 ms a call. rescanMs is the
+   * budget for that; nothing may spend it faster. The one exception is having
+   * no file to tail at all, where finding one promptly is the whole job.
+   */
+  _rescanDue(nowMs) {
+    if (this.currentFile === null) return true;
+    return nowMs - this._lastRescanMs >= this.opts.rescanMs;
+  }
+
   /** Re-pick the newest session file; re-seed if it changed. */
   async rescan() {
     this._rescanQueued = false;
+    this._lastRescanMs = this.now();
     const best = await newestSessionFile(this.sessionsDir);
     if (!best) {
       if (this.currentFile !== null) {
@@ -701,7 +768,9 @@ class CodexWatcher extends EventEmitter {
     if (this._busy) return this._lastSnapshot;
     this._busy = true;
     try {
-      if (this._rescanQueued) await this.rescan();
+      // Keep the flag set when the floor blocks: the rescan is deferred, not
+      // dropped, so a rotation still lands within rescanMs.
+      if (this._rescanQueued && this._rescanDue(this.now())) await this.rescan();
       if (this.currentFile) await this._readNew();
       return this._emitState();
     } finally {

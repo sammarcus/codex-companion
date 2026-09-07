@@ -67,6 +67,15 @@ function formatElapsed(sec) {
  *  - the snapshot must carry an observation time and be fresh (QUOTA_MAX_AGE_MS)
  *  - the window must have a numeric used_percent
  *  - if the window states a resets_at, it must be in the future
+ *  - among the windows that survive those checks, the fullest one wins
+ *
+ * RateLimitSnapshot (protocol.rs:2324) carries `primary` and `secondary` as
+ * independent Option<RateLimitWindow>. Returning the first valid one would make
+ * `secondary` unreachable, because primary is essentially always present when
+ * rate limits exist at all, and the weekly window is precisely the one a heavy
+ * user exhausts: 12% of the 5-hour window would hide 97% of the weekly one.
+ * The fullest window is the number the ring exists to surface, so it is also
+ * what QUOTA_TAKEOVER_PERCENT is measured against.
  *
  * resets_at is Option<i64> in the Rust struct (RateLimitWindow,
  * protocol.rs:2367-2376), so a legitimate fresh snapshot may simply omit it.
@@ -82,6 +91,7 @@ function pickQuotaWindow(rateLimits, nowMs) {
   // A snapshot claiming to be from the future is a clock problem, not data.
   if (observedAt - nowMs > QUOTA_MAX_AGE_MS) return null;
 
+  let best = null;
   for (const key of ['primary', 'secondary']) {
     const w = rateLimits[key];
     if (!w || typeof w !== 'object') continue;
@@ -89,9 +99,11 @@ function pickQuotaWindow(rateLimits, nowMs) {
     // resets_at is Unix seconds, and optional. Only a stated reset time that
     // has already passed disqualifies the window.
     if (Number.isFinite(w.resets_at) && w.resets_at * 1000 <= nowMs) continue;
-    return { key, window: w };
+    if (best === null || w.used_percent > best.window.used_percent) {
+      best = { key, window: w };
+    }
   }
-  return null;
+  return best;
 }
 
 /**

@@ -245,7 +245,10 @@ test('turn_aborted closes the turn without claiming success', async (t) => {
   await appendLines(file, [L_META, L_STARTED, L_ABORTED]);
   clock.t = 1788754812 * 1000 + 500;
   const snap = await w.poll();
-  assert.strictEqual(snap.state, 'done');
+  // Not 'done': that is the green success flash on the device, and a Ctrl-C
+  // must not look identical to a turn that finished. The turn is over and
+  // nothing succeeded, so it falls through to idle.
+  assert.strictEqual(snap.state, 'idle');
   assert.strictEqual(snap.abortedReason, 'interrupted');
   assert.strictEqual(snap.lastAgentMessage, null);
   w.stop();
@@ -302,7 +305,17 @@ test('the stall heuristic only fires when approvals are actually possible', asyn
   clockB.t = T0 + 10 * 1000;
   assert.strictEqual((await wB.poll()).state, 'busy', 'a short silence is just a long tool call');
 
+  // Past DEFAULTS.stallMs, which sits inside the 60-120s band
+  // docs/codex-state-format.md section 6 requires. A build or a test run can
+  // easily hold the file silent for a minute, so 60s is still just busy.
   clockB.t = T0 + 60 * 1000;
+  assert.strictEqual(
+    (await wB.poll()).state,
+    'busy',
+    'a minute of silence is a long tool call, not an approval prompt'
+  );
+
+  clockB.t = T0 + 2 * 60 * 1000;
   const snapB = await wB.poll();
   assert.strictEqual(snapB.state, 'waiting');
   assert.strictEqual(snapB.heuristic, true, 'flagged as inferred, never presented as fact');

@@ -240,6 +240,44 @@ function serialportTree() {
   return resolved.slice(0, idx + marker.length - 1);
 }
 
+/**
+ * Is this the error you get when `require('serialport')` cannot resolve?
+ * A partially copied install, or a node upgrade that orphaned the prebuild.
+ */
+function isSerialportMissing(e) {
+  const msg = (e && e.message) || '';
+  const missing = (e && e.code === 'MODULE_NOT_FOUND') || /Cannot find module/.test(msg);
+  return Boolean(missing && /serialport/.test(msg));
+}
+
+/**
+ * Attach the 'error' handler that both `run` and `demo` need.
+ *
+ * DeviceLink retries findPort() every scanMs forever, so an undeduped handler
+ * writes the same stack on every sweep: measured at 29 lines / 2283 bytes in
+ * 10 s from a copy with no node_modules, i.e. ~19 MB/day appended to
+ * ~/Library/Logs/codex-companion.log, which the plist never rotates and
+ * KeepAlive never truncates. So: dedupe by message, exactly as the sibling
+ * 'scan' handler already does, and treat an unloadable serialport as fatal.
+ * It cannot resolve itself by being retried, and exiting hands the problem to
+ * launchd's 10 s respawn throttle, which bounds it.
+ */
+function attachDeviceErrorLogging(link) {
+  let lastErrorMessage = null;
+  link.on('error', (e) => {
+    const msg = (e && e.message) || String(e);
+    if (isSerialportMissing(e)) {
+      log(`[device] fatal: serialport could not be loaded: ${msg.split('\n')[0]}`);
+      log('         this install is incomplete. Re-run: codex-companion install');
+      link.stop();
+      process.exit(1);
+    }
+    if (msg === lastErrorMessage) return;
+    lastErrorMessage = msg;
+    log(`[device] error: ${msg}`);
+  });
+}
+
 /* ------------------------------------------------------------------ *
  * cmd: run
  * ------------------------------------------------------------------ */
@@ -265,7 +303,7 @@ async function cmdRun(args) {
     link.on('close', (e) =>
       log(`[device] closed${e && e.disconnected ? ' (unplugged)' : ''}${e ? `: ${e.message}` : ''}`)
     );
-    link.on('error', (e) => log(`[device] error: ${e.message}`));
+    attachDeviceErrorLogging(link);
     // Without this, a bad cable or a board in download mode is indistinguishable
     // from a working setup: DeviceLink emits nothing until a port opens.
     let lastScanReason = null;
@@ -369,9 +407,13 @@ async function cmdInstall(args) {
   let dir;
 
   if (flags.global) {
-    const r = run('npm', ['install', '-g', 'codex-companion']);
+    // Never `npm install -g codex-companion`: the package is not published, so
+    // installing it by name 404s at the registry every single time. Install the
+    // artifact we are already running from instead. npm reads its package.json
+    // for the name, so `npm uninstall -g codex-companion` still undoes it.
+    const r = run('npm', ['install', '-g', PKG_ROOT]);
     if (!r.ok) {
-      log('npm install -g failed:');
+      log(`npm install -g ${PKG_ROOT} failed:`);
       log(r.stderr || r.stdout);
       return 1;
     }
@@ -696,7 +738,7 @@ async function cmdDemo(args) {
       log(`[device] open ${p}`);
     });
     link.on('hello', (l) => log(`[device] hello ${l === null ? '(timed out, proceeding)' : l}`));
-    link.on('error', (e) => log(`[device] error: ${e.message}`));
+    attachDeviceErrorLogging(link);
     // Bench-checking 14 units means a silent 30 seconds must never look like
     // success. DeviceLink emits 'scan' on every failed sweep; nothing else fires.
     let lastScanReason = null;
@@ -754,7 +796,7 @@ Options:
   --port <path>      use this serial port instead of auto-detecting
   --dry-run          print frames to stdout instead of opening a port
   --loop             (demo) repeat the sequence forever
-  --global           (install) npm install -g instead of copying
+  --global           (install) npm install -g this package instead of copying
   --codex-home <dir> override $CODEX_HOME
   --no-heuristic     never infer "waiting" from a stalled turn
   -h, --help         print this and exit, changing nothing

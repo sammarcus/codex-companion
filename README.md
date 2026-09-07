@@ -147,17 +147,29 @@ the short version, commands quoted directly from `firmware/README.md`:
 ## Quickstart: for the recipient
 
 1. Plug the unit into a USB port on your Mac.
-2. Open a terminal and run:
+2. Open a terminal, `cd` to wherever the `codex-companion-1.0.0.tgz`
+   tarball that shipped with the unit landed, and run:
    ```bash
-   npx codex-companion install
+   npm install -g ./codex-companion-1.0.0.tgz
+   codex-companion install
    ```
+   This package is **not** on the public npm registry, so `npx
+   codex-companion` will not find it: `npm view codex-companion` returned
+   a registry 404 on 2026-09-07. The tarball install is the offline path
+   `helper/README.md` documents, and it needs no network at all. Build a
+   fresh tarball at any time with `npm pack` from `helper/` (the version
+   in the filename tracks `helper/package.json`'s `"version"`, `1.0.0`
+   today). If someone actually runs `npm publish` before the units go
+   out, and only then, `npx codex-companion install` becomes a valid
+   one-liner: re-check with `npm view codex-companion` before relying on
+   it, and see `docs/open-questions.md` item D1.
 3. That's it. It survives reboots (installed as a launchd LaunchAgent to a
    stable `~/.codex-companion/app` directory, not a foreground process you
    have to remember to start). Your next Codex CLI session shows up on the
    ring automatically.
 4. To remove it:
    ```bash
-   npx codex-companion uninstall
+   codex-companion uninstall
    ```
 
 No account, no WiFi setup, no config file to edit. (On Linux, `install`
@@ -184,7 +196,7 @@ discarded whole):
 
 | Field | Type | Notes |
 |---|---|---|
-| `state` | string enum | `sleep`, `idle`, `busy`, `waiting`, `done`. An unrecognized value keeps the previous state rather than rejecting the line. |
+| `state` | string enum | `sleep`, `idle`, `busy`, `waiting`, `done`. An unrecognized value makes the **whole line malformed**: `applyJsonLine` returns false before any other field is touched, so the line is dropped silently, gets no `ok`, and no partial update is applied. |
 | `ring` | float, 0.0 to 1.0 | fraction filled, not a percentage; clamped, not rejected, if out of range |
 | `center` | string | clamped to 15 chars; renders large at <= 4 chars, smaller above that |
 | `label` | string | clamped to 23 chars |
@@ -214,10 +226,10 @@ whose host went away: dim at 30s, sleep look at 5 minutes. See
 | State | Meaning | Trigger (host side) | Ring behavior |
 |---|---|---|---|
 | `sleep` | No active session, or no data for 5+ minutes | No running Codex session, or the device's own 5-minute no-data timeout | Slow, dim, full-ring breathing (4000ms) |
-| `idle` | Connected, nothing running | A session exists but is between turns (also the device's own boot default before any data arrives) | Steady ring showing the last reported fill, no animation |
+| `idle` | Connected, nothing running | A session exists but is between turns (also the device's own boot default before any data arrives) | Ring shows the last reported fill with a low-amplitude 2400ms brightness breathe (`IDLE_PERIOD_MS`), so a live unit never looks frozen |
 | `busy` | Agent actively working | A turn is in progress (`task_started` seen, no matching `task_complete`/`turn_aborted` yet) | Slow breathing ring (2400ms), amber |
 | `waiting` | Agent is likely blocked on a human approval | **Confirmed shipped heuristic**, not a guaranteed signal: an open turn silent for 45+ seconds while `approval_policy` is known and not `"never"` (`helper/src/codex-watcher.js`, togglable with `--no-heuristic`). Approval events themselves are essentially never persisted to disk by Codex, so this is inference, not a direct read of "an approval is pending." | Amber pulse, period shortens as `tps` rises, escalates to red and halves speed at a fixed 10s threshold, no continuous ramp |
-| `done` | A turn just completed | `task_complete` with no error | 600ms green flash per line received, typically re-triggered 2 to 3 times over the helper's ~5-second done hold via its 2-second heartbeat, then settles back to the `idle` look |
+| `done` | A turn just completed | `task_complete` with no error | Exactly one 600ms green flash per transition into `done`: ramps up over 120ms (`DONE_RISE_MS`), decays, then cross-fades into the `idle` look over the last 150ms (`DONE_XFADE_MS`). The flash is armed on the state edge only, so the repeated `done` lines the helper's 2-second heartbeat sends during its ~5-second done hold are keepalives and replay nothing |
 
 Elapsed and tokens/sec are both derived metrics the helper computes
 (`helper/src/frame.js`), not values Codex reports directly.

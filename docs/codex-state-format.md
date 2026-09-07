@@ -451,8 +451,21 @@ means "this turn ended", not "the session ended". An interactive session goes ba
 
 - **Context window fill %.** Take `W` from the most recent `task_started.model_context_window`
   (fall back to `token_count.info.model_context_window`). Take `used` from the most recent
-  `token_count.info.total_token_usage.total_tokens`, or if no `token_count` yet, from the most
-  recent `token_usage_record.payload.thread_token_usage.total_tokens`.
+  `token_count.info.last_token_usage.total_tokens`, or if no `token_count` yet, from the most
+  recent `token_usage_record.payload.usage.total_tokens`.
+
+  **Do not use the `total_*` / `thread_*` figures here.** `total_token_usage`,
+  `thread_token_usage` and `turn_token_usage` are cumulative session accounting: they only ever
+  grow, they count every turn's input and output added together, and feeding them into the
+  formula below drives the ring to a static 100% within a few turns and pins it there.
+  `tui/src/token_usage.rs:37-38` is explicit about the distinction: "For `last_token_usage`,
+  this is the latest active context size; for `total_token_usage`, this is the accumulated
+  session total." `usage` on a `token_usage_record` is the per-response analogue of
+  `last_token_usage` (`protocol.rs:2237-2247`), which is why it is the fallback rather than
+  `thread_token_usage`. `helper/src/codex-watcher.js` keeps the two in separate fields for
+  exactly this reason: `contextTokens` (fed from `last_token_usage` / `usage`) is what reaches
+  `contextFill()` and the ring, `totalTokens` (fed from the cumulative figures) is display-only
+  accounting and never touches the ring.
 
   Codex's own formula is **not** `used/W`. From `TokenUsage::percent_of_context_window_remaining`
   (`protocol.rs:2428`) with `BASELINE_TOKENS = 12000` (`protocol.rs:2394`):
@@ -474,7 +487,15 @@ means "this turn ended", not "the session ended". An interactive session goes ba
 - **Tokens/sec.** Codex does not report a rate. Compute it:
   `payload.usage.output_tokens` from a `token_usage_record`, divided by the wall time between
   that record and the previous one (use the envelope `timestamp`, which is ms-precision UTC).
-  Turn-level: `turn_token_usage.output_tokens / (duration_ms / 1000)` from `task_complete`.
+  Turn-level: there is **no** token usage on the turn-complete event, so take the delta yourself:
+  `(cumulative output_tokens at turn end - cumulative output_tokens at turn start) /
+  (duration_ms / 1000)`, snapshotting the running `output_tokens` when `task_started` fires and
+  reading it again at `task_complete`. `TurnCompleteEvent` (`protocol.rs:2141-2164`) carries
+  exactly `turn_id`, `last_agent_message`, `error`, `started_at`, `completed_at`, `duration_ms`
+  and `time_to_first_token_ms`, and nothing else: `turn_token_usage` lives on
+  `token_usage_record` (section 5), not here. This is what `helper/src/codex-watcher.js` ships
+  (`_turnStartTokensOut`, set in the `task_started` branch, differenced in the
+  `TURN_COMPLETE` branch).
   Label it derived. It is an average over the interval, not an instantaneous rate, and it excludes
   time spent in tool calls.
 

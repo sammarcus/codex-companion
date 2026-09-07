@@ -61,8 +61,11 @@ per-unit build keeps `BOARD_HAS_PSRAM` and the USB CDC flags intact.
 A build with no `UNIT_ID` is not stamped `UNIT 00`, which would look like a
 real serial number on a batch of 14 identical boards. `src/main.cpp` treats
 `UNIT_ID == 0` as unset and the boot screen reads `UNIT -- <MAC>`, where
-`<MAC>` is the low 16 bits of the efuse MAC, so an unstamped board is both
-obviously unstamped and still distinguishable from its neighbours.
+`<MAC>` is the last two bytes of the efuse MAC (`mac[4]`, `mac[5]`), so an
+unstamped board is both obviously unstamped and still distinguishable from its
+neighbours. It has to be that end of the address: the first three bytes are the
+Espressif OUI and are identical across the whole batch, so a suffix taken from
+there would print the same digits on all 14 boards.
 `tools/flash-all.sh` injects `-DUNIT_ID=<n>` for units 1..14, so the batch path
 never hits this.
 

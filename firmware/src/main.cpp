@@ -18,6 +18,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <esp_mac.h>
 #include <math.h>
 
 #include "LGFX_TDisplayS3.hpp"
@@ -544,8 +545,20 @@ static void drawBootScreen() {
   // used. "UNIT 00" would look like a real serial number; show an obviously
   // unset marker plus the efuse MAC suffix so 14 identical boards are still
   // tellable apart.
-  uint32_t macTail = (uint32_t)(ESP.getEfuseMac() & 0xFFFFu);
-  snprintf(unit, sizeof(unit), "UNIT -- %04X", (unsigned)macTail);
+  //
+  // The suffix must come from the LAST two MAC bytes (mac[4], mac[5]), which
+  // are the per-device half. The first three are the Espressif OUI and are
+  // identical on every board in the batch, so a suffix taken from that end
+  // would print the same four hex digits on all 14 units. ESP.getEfuseMac()
+  // returns a uint64_t that IDF filled by writing 6 bytes through a uint8_t*
+  // (Esp.cpp: esp_efuse_mac_get_default((uint8_t*)&_chipmacid)), so on this
+  // little-endian target its low 16 bits are mac[0]/mac[1], i.e. the OUI.
+  // Reading the byte buffer directly sidesteps that trap entirely and matches
+  // docs/design-spec.md 2.6 ("%02X%02X", mac[4], mac[5]).
+  uint8_t mac[6] = {0};
+  esp_efuse_mac_get_default(mac);
+  snprintf(unit, sizeof(unit), "UNIT -- %02X%02X",
+           (unsigned)mac[4], (unsigned)mac[5]);
 #else
   snprintf(unit, sizeof(unit), "UNIT %02d", (int)UNIT_ID);
 #endif

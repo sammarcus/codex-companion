@@ -14,8 +14,9 @@ writes to your own disk. Nothing is uploaded anywhere.
 
 Requires Node 20 or newer (`node --version` to check).
 
-Plug the board into any USB port. The tarball that came with it installs
-without a network:
+Plug the board into any USB port. The tarball that came with it is
+self-contained: `serialport` and its prebuilt binding are bundled inside it, so
+this installs with no network access at all.
 
 ```bash
 npm install -g ./codex-companion-1.0.0.tgz
@@ -30,9 +31,10 @@ and then streams in the foreground too.
 `codex-companion --help` and `codex-companion --version` print and exit; they
 change nothing.
 
-This package is not on the public npm registry, so `npx codex-companion` will
-not find it. Build the tarball yourself with `npm pack` from this directory if
-you ever need a fresh one.
+This package is not on the public npm registry, so nothing can fetch it by
+name: install from the tarball or from a checkout, never by package name. Build
+a fresh tarball with `npm pack` from this directory if you ever need one; it
+bundles the dependency, so the result installs offline.
 
 ## What the display means
 
@@ -95,7 +97,9 @@ Useful flags:
 --loop                         (demo) repeat forever
 --codex-home /path             watch a different $CODEX_HOME
 --no-heuristic                 never infer "waiting" from a stalled turn
---global                       (install) npm install -g instead of copying into
+--global                       (install) npm install -g this package (the local
+                               directory, never the registry: the name is not
+                               published) instead of copying into
                                ~/.codex-companion/app. Needs a writable global
                                npm prefix; without one, npm fails with EACCES
                                and the plain install is the better option.
@@ -156,13 +160,11 @@ approval prompts to the session file, so with any other approval policy the
 `waiting` state is inferred from a turn that has gone silent, not observed
 directly. It is a good guess, not a fact. `--no-heuristic` turns it off.
 
-**It stopped working after I upgraded Node.**
-The autostart entry points at the exact `node` binary that was present at
-install time. Re-run `npx codex-companion install` to repoint it.
-
 **`npm warn install-scripts ... @serialport/bindings-cpp`.**
-Harmless. The prebuilt native binding is resolved when the module loads, not by
-that install script, and it covers Intel and Apple Silicon in one file. Nothing
+Harmless, and you only see it when installing from a source checkout: the
+shipped tarball bundles the module already built. The prebuilt native binding is
+resolved when the module loads, not by that install script, and it covers Intel
+and Apple Silicon in one file. Nothing
 is compiled and no Xcode toolchain is needed. If serial really does fail to
 load, `npm rebuild @serialport/bindings-cpp` will build it from source (that
 one does need Xcode Command Line Tools).

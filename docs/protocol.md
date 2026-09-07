@@ -177,13 +177,34 @@ at boot and `pumpSerial` refreshes on every accepted line:
 | under 30s (`STALE_DIM_MS`) | Render normally per the current struct and `state`; brightness held at full (`updateBrightness`). | `STALE_DIM_MS`, `updateBrightness` |
 | 30s to 5min | **Dim.** Backlight duty drops to **70/255** (`BRIGHT_DIM_IDX`, index 2 of `BRIGHT_LEVELS = {255,160,70,20}`). The panel keeps animating rather than freezing, "dim last frame" is a brightness effect, not a frozen frame. One content change does ride along at this tier: `effectiveState` renders a stored `busy` or `waiting` as the `idle` look once past `STALE_DIM_MS`, so a stale unit stops demanding attention for an approval prompt that no longer exists. `sleep`, `idle`, and `done` render unchanged, and `st.state` is untouched either way. This confirms `docs/design-spec.md` section 2.8's separately-proposed "idle dim" duty of `70` was reused here, one shared value, not two distinct tiers, resolving what was an open question in the first draft of this doc. | `STALE_DIM_MS`, `BRIGHT_LEVELS`, `BRIGHT_DIM_IDX`, `updateBrightness` |
 | 5min or more (`STALE_SLEEP_MS`) | Backlight drops further to **20/255** (`BRIGHT_SLEEP_IDX`, index 3), and **rendering** is forced to the `sleep` look (dim breathing full ring) regardless of the last `state` the host sent, via `effectiveState`, called fresh each frame by `renderFrame`. **Confirmed: this is a render-time override only. It does not overwrite the stored `st.state` field.** The moment a new line arrives, whatever `state` it carries (or the previously-stored `state`, if the new line omits it) renders immediately, the forced-sleep look was never actually written into the struct. This resolves what the first draft of this doc could only guess at as a design choice. | `STALE_SLEEP_MS`, `BRIGHT_SLEEP_IDX`, `effectiveState`, `updateBrightness` |
-| New line arrives after either timeout | `updateBrightness` snaps straight back to full brightness (index 0) on the next `since < STALE_DIM_MS` check, and rendering resumes per the merged struct immediately, no fade. | `updateBrightness` |
+| New line arrives after either timeout | The **staleness** input returns to tier 0 on the next `since < STALE_DIM_MS` check and rendering resumes per the merged struct immediately, no fade. Brightness returns to full only if the **state** input is also at tier 0: a fresh line carrying `sleep` lands on 20/255 straight away, and a fresh `idle` comes back to full but steps down to 70/255 again once that `idle` has been held `IDLE_DIM_MS`. | `updateBrightness` |
+
+**Staleness is only one of two brightness inputs, and the dimmer of the
+two wins.** `updateBrightness(nowMs, eff)` computes a staleness tier and
+a state tier independently, then takes `if (stateTier > tier) tier =
+stateTier;` before mapping through `TIER_IDX = {BRIGHT_FULL_IDX,
+BRIGHT_DIM_IDX, BRIGHT_SLEEP_IDX}`:
+
+| State (as `effectiveState` resolved it) | State tier | Backlight floor it imposes |
+|---|---|---|
+| `sleep` | 2 | **20/255 immediately**, no waiting period, whether that `sleep` came from the host or from the 5-minute render override |
+| `idle` held for `IDLE_DIM_MS` (**15000ms**) or longer, measured from `stateEnterMs` | 1 | **70/255** |
+| anything else (`busy`, `waiting`, `done`, `idle` held under 15s) | 0 | full |
+
+The source comment says why the state input exists at all: without it
+the tiers were unreachable in practice, since a running helper sends a
+keepalive every 2000ms, so `since` never approaches 30s and a
+host-declared `sleep` would otherwise sit at full backlight all night.
 
 A manual brightness override (pressing Button 1, GPIO 0) pins the
 brightness level and suppresses this whole auto-dim ladder
 (the `brightManual` flag, set by `pumpButton` and honoured by
-`updateBrightness`) until the staleness tier itself changes, at which
-point `updateBrightness` clears the flag and releases the pin.
+`updateBrightness`) until the **combined auto tier** itself changes, at
+which point `updateBrightness` clears the flag and releases the pin. The
+release is keyed to `tier != lastTier` after the state tier has already
+been folded in, so an `idle` crossing its 15-second `IDLE_DIM_MS` mark
+releases a manual pin exactly the same way a 30-second staleness
+crossing does.
 
 The host-side helper is confirmed to send data often enough that this
 matters in practice, and not by accident: `helper/src/device.js`'s
@@ -216,22 +237,37 @@ Also newline-delimited UTF-8 text, but not JSON, plain text lines.
 ### 3.1 What counts as "malformed" (confirmed, no longer open)
 
 The first draft of this doc treated "does an unrecognized `state` value
-make the whole line malformed" as an open question. **It's now answered
-by source, and the answer is no.** `parseStateName`
-returns the device's *current* state unchanged for any string that isn't
-one of the five known values, and `applyJsonLine` still returns `true`
-(accepted, gets an `ok`) as long as the JSON itself parsed as an object,
-regardless of what any individual field's value was. Concretely,
-malformed (silently dropped, no `ok`) means exactly:
+make the whole line malformed" as an open question, then a later draft
+answered it backwards. **The shipped answer is yes: an unrecognized
+`state` string makes the whole line malformed.** `parseStateName` takes
+a `bool* ok` out-parameter and sets it false for anything outside the
+five-name enum, and `applyJsonLine` acts on that immediately:
+
+```c
+bool nameOk = false;
+StateId ns = parseStateName(v.as<const char*>(), &nameOk);
+// An unrecognised name is a host bug, not a keepalive: drop the whole line
+// silently rather than acking it while showing the previous state.
+if (!nameOk) return false;
+```
+
+That `return false` runs **before** the `ring`, `tps`, `center`, `label`
+and `sub` blocks, so nothing else on the line is applied either: it is
+not a partial update, it is a dropped line. Concretely, malformed
+(silently dropped, no `ok`) means exactly:
 
 - Not valid JSON at all (`deserializeJson` returns an error).
 - Valid JSON that is not an object (e.g. `42`, `"busy"`, `[1,2,3]`,
   `doc.is<JsonObject>()` fails).
 - The raw line exceeds 512 bytes before a `\n` is seen (section 1).
+- A `state` key holding a string that is not one of `sleep`, `idle`,
+  `busy`, `waiting`, `done` (`parseStateName` sets `*ok = false`,
+  `applyJsonLine` returns false before touching any other field).
 
-Everything else, including an object with an unrecognized `state` string,
-an object with fields of the wrong type, or an object with zero
-recognized keys, is accepted and acked.
+Everything else, including an object with fields of the wrong type
+(skipped by the `!v.isNull() && v.is<T>()` gate) or an object with zero
+recognized keys, is accepted and acked. `firmware/README.md`'s field
+table and `main.cpp`'s own file header both state the same rule.
 
 ---
 
@@ -289,16 +325,29 @@ Notes on this set, updated against the shipped source:
   every internal tick. If nothing else in the frame changes during the
   done hold (a plausible case: context-fill and elapsed can both be
   static once the turn has ended), the realistic result is the device
-  gets `"done"` once immediately, then the identical line resent again by
-  the heartbeat at roughly +2s and +4s, each re-arming the 600ms flash, so
-  in practice expect **two or three separate ~600ms flashes spaced about
-  2 seconds apart** over the 5-second done window, not one single 600ms
-  blip and not a continuous 5-second flash, either of which the first
-  draft of this doc guessed at without this level of confirmation. This
-  resolves the original open question about whether `done` auto-reverts
-  on its own or waits for the host: it's both, the device's rendering
-  auto-reverts quickly (600ms) each time, and the host's heartbeat is what
-  makes that repeat a couple of times over its own longer hold window.
+  gets `"done"` once immediately, then the identical line resent by the
+  heartbeat at roughly +2s and +4s. **Those repeats replay nothing.** The
+  flash is armed on the state edge only, inside the `if (ns != st.state)`
+  branch of `applyJsonLine`:
+
+  ```c
+  // Arm the done flash on the 0->1 edge only. The host resends an
+  // unchanged frame every heartbeatMs (2000ms) while a turn's numbers sit
+  // still, so re-arming on a repeat would play the flash three times per
+  // completed turn; a repeated "done" line is a keepalive, nothing more.
+  if (ns == ST_DONE)    doneEnterMs = millis();
+  ```
+
+  So one completed turn produces **exactly one 600ms flash**: a 120ms
+  ramp up (`DONE_RISE_MS`), a decay, and a 150ms cross-fade into the idle
+  look over the tail (`DONE_XFADE_MS`), after which the `else` branch just
+  draws the idle look for as long as `st.state` stays `ST_DONE`. An
+  earlier draft of this doc claimed two or three flashes per turn,
+  describing a re-arm the shipped firmware deliberately does not do. This
+  also resolves the original open question about whether `done`
+  auto-reverts on its own or waits for the host: the device's rendering
+  auto-reverts on its own after 600ms, and the host's later `done` lines
+  are pure keepalives that neither extend nor repeat the animation.
 - Line 6 is a bare partial update (`tps` only) demonstrating the
   keep-last-value rule from 2.3, every other field, including `state`,
   stays whatever it was after line 5.

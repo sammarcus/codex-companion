@@ -293,8 +293,10 @@ test("the README's flag list matches the flags the CLI actually implements", () 
     assert.ok(readme.includes(flag), `${flag} is in the README`);
   }
   // The package is not published, so the README must not hand out a command
-  // that 404s at the desk.
-  assert.ok(!/npx codex-companion\s*$/m.test(readme), 'no bare npx install instruction');
+  // that 404s at the desk. The old anchored form only caught an npx line that
+  // ended right after the package name, so `npx codex-companion install` sailed
+  // through and shipped. Match any npx invocation at all.
+  assert.ok(!/\bnpx\s+codex-companion\b/.test(readme), 'no npx install instruction');
 });
 
 test('package.json records the name the recon found free', () => {
@@ -303,6 +305,14 @@ test('package.json records the name the recon found free', () => {
   assert.strictEqual(pkg.bin['codex-companion'], 'bin/codex-companion.js');
   assert.ok(pkg.engines.node.includes('20'), 'Node >= 20, matching serialport engines');
   assert.ok(pkg.dependencies.serialport, 'serialport is a real dependency');
+  // The README promises the shipped tarball installs with no network. That is
+  // only true while serialport is bundled into it: without this, `npm pack`
+  // emits 9 files, and an offline install dies with ENOTCACHED at the desk.
+  assert.deepStrictEqual(
+    pkg.bundleDependencies,
+    ['serialport'],
+    'serialport must be bundled or the offline install claim is false'
+  );
 });
 
 test('the plist entry point exists in the package', () => {
