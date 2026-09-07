@@ -7,7 +7,9 @@
 // Protocol, host -> device, one JSON object per line. Any field may be
 // omitted and the device keeps the previous value:
 //   {"state":"busy","ring":0.62,"center":"62%","label":"CTX",
-//    "sub":"12:34 elapsed","tps":17.3}
+//    "sub":"12:34 elapsed","tps":17.3,"name":"Alex Rivera"}
+// "name" is the one field with a side effect beyond the current frame: it is
+// persisted to NVS and survives a power cycle. "" clears it.
 // Device -> host:
 //   "hello tdisplay-s3 v1" once on boot, "ok" per accepted line.
 //   Malformed lines are ignored silently. A "state" value outside the five
@@ -22,6 +24,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <esp_mac.h>
 #include <math.h>
 
@@ -31,20 +34,56 @@
 #define UNIT_ID 0
 #endif
 
-// Optional owner name, baked in at build time next to UNIT_ID:
+// Owner name. There are three sources, in this precedence order:
+//
+//   1. the name stored in NVS, set at runtime by a protocol line carrying
+//      "name" (see setOwnerName below). This is how the fleet is
+//      personalized: all 14 boards flash from one identical image and are
+//      named afterwards, over the wire.
+//   2. -DUNIT_NAME, a build-time DEFAULT for anyone who does want one baked
+//      in. It is never written to NVS, so a stored name always wins and
+//      clearing the stored name falls back to it rather than to nothing.
+//   3. no name at all: the screens show the product name and the unit id.
 //
 //   PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex\""' pio run
 //
-// tools/flash-all.sh reads tools/units.txt and does that quoting for you.
-// Unset (or set to an empty string) is a supported configuration, not an
-// error: the boot and ambient screens fall back to the UNIT_ID line, so a
-// board flashed with a plain `pio run -t upload` still reads correctly.
+// The quotes are part of the macro body and PlatformIO shlex-splits the
+// environment variable, which is why the inner pair is backslash-escaped.
+// Unset (or set to an empty string) is the normal configuration and not an
+// error: tools/flash-all.sh does not set it at all.
 #ifndef UNIT_NAME
 #define UNIT_NAME ""
 #endif
 
 static const char kUnitName[] = UNIT_NAME;
-static inline bool haveUnitName() { return kUnitName[0] != '\0'; }
+
+// Persisted owner name, mirrored in RAM. Empty means "nothing stored", which
+// is not the same as "stored as an empty string": clearing removes the key.
+//
+// 24 characters, measured rather than guessed. On this board, with this
+// firmware, LovyanGFX Font2 at textSize 1 reports fontHeight 16 and a widest
+// printable-ASCII advance of 10px (the glyph is 'M'; every ASCII code 32..126
+// was measured with textWidth on the real panel, not looked up). The ambient
+// headline is centred and rides the burn-in drift, whose horizontal amplitude
+// is AMB_DRIFT_AX = 9px, so the width that can never touch an edge is
+// 320 - 2*9 = 302px, i.e. 30 characters of the worst-case glyph. 24 is that
+// ceiling minus a deliberate margin: 24 x 10 = 240px worst case, which leaves
+// 31px of clear panel on each side at the drift extreme. For reference, the
+// same probe measured "Alexandra Rivera-Smith" (22 chars) at 143px.
+static constexpr size_t OWNER_NAME_MAX = 24;          // characters
+static constexpr size_t OWNER_NAME_CAP = OWNER_NAME_MAX + 1;
+static constexpr const char* NVS_NAMESPACE = "codexbuddy";
+static constexpr const char* NVS_KEY_OWNER = "owner";
+
+static char gOwnerName[OWNER_NAME_CAP] = "";
+
+// Stored name, then compile-time default, then nothing.
+static const char* activeName() {
+  if (gOwnerName[0] != '\0') return gOwnerName;
+  if (kUnitName[0]  != '\0') return kUnitName;
+  return nullptr;
+}
+static inline bool haveUnitName() { return activeName() != nullptr; }
 
 static constexpr const char* PRODUCT_NAME = "codex companion";
 
@@ -264,6 +303,62 @@ static void copyClamped(char* dst, size_t cap, const char* src) {
   dst[i] = '\0';
 }
 
+// ---------------------------------------------------------------------------
+// Owner name in NVS
+// ---------------------------------------------------------------------------
+
+// Read the stored name at boot. A read-only open fails when the namespace has
+// never been written, which is the state of every freshly flashed board: that
+// is the normal no-name path, not an error.
+static void loadOwnerName() {
+  gOwnerName[0] = '\0';
+  // A board that has never been named has no "codexbuddy" namespace and no
+  // "owner" key, and the Arduino Preferences wrapper reports both misses with
+  // log_e. On this target that log shares the USB CDC the protocol uses, so an
+  // unnamed board would otherwise greet its host with two stray
+  // "[E][Preferences.cpp:...] nvs_... NOT_FOUND" lines every boot. Those calls
+  // are compiled out by -DCORE_DEBUG_LEVEL=0 in platformio.ini; note that
+  // esp_log_level_set() does NOT reach them, because at this log level the
+  // Arduino HAL macros call log_printf directly and never go through an
+  // esp_log tag (cores/esp32/esp32-hal-log.h:159).
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, true)) return;
+  char buf[OWNER_NAME_CAP];
+  buf[0] = '\0';
+  prefs.getString(NVS_KEY_OWNER, buf, sizeof(buf));
+  prefs.end();
+  copyClamped(gOwnerName, sizeof(gOwnerName), buf);
+}
+
+// Store a name, clamped to OWNER_NAME_MAX characters. An empty string removes
+// the key so the compile-time default (or the unnamed fallback) comes back.
+//
+// Idempotent on purpose: NVS lives in the same flash the firmware does and a
+// host that resends its whole frame every 2000ms would otherwise rewrite the
+// key 43,200 times a day. The RAM mirror is exactly what is on flash, so
+// comparing against it is the same test as reading the key back.
+//
+// Returns true if anything changed.
+static bool setOwnerName(const char* v) {
+  char next[OWNER_NAME_CAP];
+  copyClamped(next, sizeof(next), v);
+  if (strcmp(next, gOwnerName) == 0) return false;   // no write, no wear
+
+  copyClamped(gOwnerName, sizeof(gOwnerName), next);
+
+  Preferences prefs;
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    // The name is live on screen for this power cycle but will not survive a
+    // reboot. Say so rather than pretending it stuck.
+    Serial.println("err: nvs open failed, name not persisted");
+    return true;
+  }
+  if (next[0] != '\0') prefs.putString(NVS_KEY_OWNER, next);
+  else                 prefs.remove(NVS_KEY_OWNER);
+  prefs.end();
+  return true;
+}
+
 // Resolve a protocol state name. `*ok` is set false for anything not in the
 // five-name enum, so the caller can reject the whole line rather than acking a
 // host typo with "ok" while silently keeping the old state.
@@ -372,6 +467,16 @@ static bool applyJsonLine(const char* line, size_t len) {
   v = doc["sub"];
   if (!v.isNull() && v.is<const char*>()) {
     copyClamped(st.sub, sizeof(st.sub), v.as<const char*>());
+    touched = true;
+  }
+
+  // "name" outlives the frame: it is written to NVS and reloaded on the next
+  // boot. "" clears the stored name and falls back to UNIT_NAME, then to the
+  // unnamed screens. setOwnerName only touches flash when the value actually
+  // differs from what is already stored.
+  v = doc["name"];
+  if (!v.isNull() && v.is<const char*>()) {
+    setOwnerName(v.as<const char*>());
     touched = true;
   }
 
@@ -699,12 +804,13 @@ static void renderAmbient(uint32_t nowMs) {
 
   gfx->setTextColor(scaleColor(C_TEXT, gXfade * 0.88f), C_BG);
   gfx->setFont(&fonts::Font2);
-  gfx->drawString(haveUnitName() ? kUnitName : PRODUCT_NAME,
+  const char* owner = activeName();
+  gfx->drawString(owner ? owner : PRODUCT_NAME,
                   RING_CX + gOx, LABEL_Y + gOy);
 
   gfx->setTextColor(scaleColor(C_TEXT_DIM, gXfade), C_BG);
   gfx->setFont(&fonts::Font0);
-  gfx->drawString(haveUnitName() ? PRODUCT_NAME : unit,
+  gfx->drawString(owner ? PRODUCT_NAME : unit,
                   RING_CX + gOx, SUB_Y + gOy);
 
   lastAccent = accent;
@@ -777,7 +883,7 @@ static void drawBootScreen() {
     // identification does not depend on remembering who got which name.
     gfx->setTextColor(C_TEXT, C_BG);
     gfx->setFont(&fonts::Font2);
-    gfx->drawString(kUnitName, SCREEN_W / 2, 106);
+    gfx->drawString(activeName(), SCREEN_W / 2, 106);
     gfx->setTextColor(C_TEXT_DIM, C_BG);
     gfx->setFont(&fonts::Font0);
     gfx->drawString(unit, SCREEN_W / 2, 132);
@@ -942,6 +1048,10 @@ void setup() {
   gfx = fbReady ? (LovyanGFX*)&fb : (LovyanGFX*)&lcd;
   if (!fbReady) Serial.println("err: sprite alloc failed, drawing direct");
 
+  // Before the first pixel: the boot screen shows the owner name, so the
+  // stored one has to be in RAM by now.
+  loadOwnerName();
+
   drawBootScreen();
   uint32_t bootStart = millis();
   while (millis() - bootStart < BOOT_HOLD_MS) {
@@ -954,7 +1064,13 @@ void setup() {
     delay(10);
   }
 
-  Serial.println("hello tdisplay-s3 v1");
+  // The greeting keeps its exact "hello tdisplay-s3 v1" prefix (the helper
+  // matches /hello\s+tdisplay-s3/i and tools/flash-all.sh globs on the same
+  // substring) and appends the name the device is actually running with, so a
+  // host can read back what a "name" line did without a new command. Always
+  // quoted, so no name is an unambiguous name="".
+  const char* bootName = activeName();
+  Serial.printf("hello tdisplay-s3 v1 name=\"%s\"\n", bootName ? bootName : "");
 
   lastDataMs      = millis();
   waitEnterMs     = millis();

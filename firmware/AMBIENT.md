@@ -5,8 +5,8 @@ may never run the host helper at all. So the host software is now a bonus, not
 a requirement: on USB power alone, with nothing talking to it, the unit has to
 be an object worth leaving switched on indefinitely.
 
-Everything below lives in `src/main.cpp`. `tools/units.txt` and
-`tools/flash-all.sh` carry the per-unit names.
+Everything below lives in `src/main.cpp`. `tools/flash-all.sh` is the
+assembly-day flasher; it carries no names, because names are runtime state now.
 
 ## 1. Ambient mode
 
@@ -44,7 +44,7 @@ Composition, all of it moving, none of it an error message:
   design-spec 2.3 blues. The teal is new: design-spec has no "no host attached"
   state, so there was nothing in its table to borrow, and without a third stop
   the drift reads as one flat blue for 45 seconds.
-- Two text lines under the ring. With a name baked in: the owner's name on the
+- Two text lines under the ring. With a name set: the owner's name on the
   label line in Font2, the product name below it in Font0. Without one: the
   product name on the label line, the unit id below it.
 
@@ -89,10 +89,54 @@ the ack.
 
 ## 2. Personalization
 
-`-DUNIT_NAME` is a new compile-time flag alongside the existing `-DUNIT_ID`.
-The `UNIT_ID` behaviour is unchanged: still unset in `platformio.ini`, still
-defaulted to 0 in `main.cpp`, and 0 still renders as `UNIT -- <MAC suffix>`
-rather than a `UNIT 00` that would read like a real serial number.
+The recipients' names are not known at flash time, so the name is **runtime
+state stored on the device**, not a build flag. All 14 boards flash from one
+identical image; the only per-board build flag is `-DUNIT_ID`, whose behaviour
+is unchanged (still unset in `platformio.ini`, still defaulted to 0 in
+`main.cpp`, and 0 still renders as `UNIT -- <MAC suffix>` rather than a
+`UNIT 00` that would read like a real serial number).
+
+### Setting the name
+
+The protocol gained one optional field, `name`, on the same JSON line as
+everything else:
+
+```sh
+printf '{"name":"Alex Rivera"}\n' > /dev/cu.usbmodem101
+printf '{"name":""}\n'            > /dev/cu.usbmodem101   # clear it
+```
+
+A non-empty `name` is stored in NVS and used from that frame on. An empty
+string removes the key. Either way the line is acked with `ok` like any other.
+A malformed or non-string `name` is ignored, exactly like a non-string `ring`.
+
+### Where it is kept
+
+Arduino `Preferences`, namespace `codexbuddy`, key `owner`. `loadOwnerName()`
+runs in `setup()` before the boot screen draws, so the first frame after power
+on already shows the right name. A RAM mirror, `gOwnerName`, holds exactly what
+is on flash.
+
+`setOwnerName()` compares the incoming value against that mirror and returns
+early when they match, so **nothing is written unless the value actually
+changed**. That matters: NVS lives in the same flash the firmware does, and a
+host that includes `"name"` in its 2000ms heartbeat would otherwise rewrite the
+key about 43,000 times a day.
+
+If NVS cannot be opened for writing, the name still applies for this power
+cycle and the device prints `err: nvs open failed, name not persisted` rather
+than silently pretending it stuck.
+
+### Precedence
+
+1. the name stored in NVS
+2. `-DUNIT_NAME`, still supported as a build-time **default** only
+3. no name: product name plus unit id
+
+`activeName()` is the single function that resolves this, and every screen and
+the boot greeting go through it. `UNIT_NAME` is never written to NVS, so a
+stored name always wins and clearing the stored name falls back to the baked
+default rather than to nothing.
 
 ```sh
 PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex Rivera\""' pio run
@@ -100,9 +144,9 @@ PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex Rivera\""' pio run
 
 The quotes are part of the macro body, and PlatformIO shlex-splits the
 environment variable, which is why the inner pair has to be backslash-escaped.
-`tools/flash-all.sh` does that quoting for you.
+`tools/flash-all.sh` does not set this flag at all.
 
-Unset, or set to an empty string, is a supported configuration, not an error:
+Unset is the normal configuration, not an error:
 
 | | Boot screen | Ambient screen |
 |---|---|---|
@@ -112,19 +156,37 @@ Unset, or set to an empty string, is a supported configuration, not an error:
 The unit id is still on the boot screen even when a name is set, so
 assembly-day identification never depends on remembering who got which name.
 
-### `tools/units.txt`
+### The 24 character cap, and how it was measured
 
-One name per line. Line N is unit N, counting only non-comment lines, so the
-first non-comment line is unit 1. Blank lines count and hold a slot open, which
-is how you leave a single unit unnamed without renumbering everyone below it.
-The file ships with 14 placeholder names (`Placeholder 01` through
-`Placeholder 14`); `flash-all.sh` prints a warning to stderr and writes
-`placeholder-name` into `tools/fleet-log.tsv` if it flashes one, so a forgotten
-edit is loud rather than silent.
+Stored names are truncated to 24 characters. That number was measured on the
+board, not estimated: a temporary probe build walked ASCII 32..126 through
+`textWidth()` with `fonts::Font2` at text size 1 on the real panel and reported
+`fontHeight 16`, widest glyph `M` at **10px** advance. (`W` is not the widest
+in this font, which is why the probe scanned the whole range instead of
+assuming.) The ambient headline is centre-datum and rides the burn-in drift,
+whose horizontal amplitude `AMB_DRIFT_AX` is 9px, so the width that can never
+touch an edge is `320 - 2*9 = 302px`, i.e. 30 characters of the worst-case
+glyph. 24 is that hard ceiling with a deliberate margin: 240px worst case,
+leaving 31px of clear panel on each side at the drift extreme. For scale, the
+same probe measured `Alexandra Rivera-Smith` (22 characters) at 143px and 24
+lowercase `m` at 192px.
 
-Backslashes and double quotes are stripped from a name before it reaches the
-compiler. Names are drawn with the built-in LovyanGFX bitmap fonts, which have
-no glyphs beyond ASCII, so non-ASCII will not render.
+Non-ASCII will not render: the built-in LovyanGFX bitmap fonts have no glyphs
+beyond ASCII.
+
+### The boot greeting now carries the name
+
+```
+hello tdisplay-s3 v1 name="Alex Rivera"
+```
+
+The `hello tdisplay-s3 v1` prefix is byte-for-byte what it was. The host helper
+matches `/hello\s+tdisplay-s3/i` (`helper/src/device.js:47`) and
+`tools/flash-all.sh` globs `*"hello tdisplay-s3"*`; both are substring tests,
+so the suffix is invisible to them. It exists so a host can read back what a
+`name` line actually did, and so persistence across a power cycle is provable
+over the wire instead of by eye. Always quoted, so an unnamed board is an
+unambiguous `name=""`.
 
 ### `tools/flash-all.sh`
 
@@ -135,12 +197,24 @@ its keep), removes the stale `main.cpp.o` so a build cannot reuse the previous
 unit's flags, uploads, and verifies by reading `hello tdisplay-s3` back off the
 port before logging the unit as good.
 
-New: it reads the name for each unit from `tools/units.txt`, echoes it before
-building, appends `-DUNIT_NAME` to the build flags when there is one, and adds
-two columns to `tools/fleet-log.tsv` (the name, and `ok` / `placeholder-name` /
-`no-greeting`). `NAMES_FILE=/some/other/file` overrides the source. A missing
-names file or a blank slot is not an error; that board simply builds with no
-`-DUNIT_NAME`.
+What changed: it no longer reads, needs, or accepts names. `tools/units.txt`
+and the `NAMES_FILE` override are gone, along with the placeholder-name warning
+they existed to support, because there is no longer a name that can be baked in
+wrong. `tools/fleet-log.tsv` is back to four columns: unit, USB serial, UTC
+timestamp, and `ok` / `no-greeting`.
+
+### One more serial-port note
+
+`platformio.ini` now sets `-DCORE_DEBUG_LEVEL=0`. The Arduino `Preferences`
+wrapper calls `log_e()` when a namespace or key is missing, which is the state
+of every board that has not been named yet, and on this target that log goes
+out of the same USB CDC the protocol runs on. Two stray
+`[E][Preferences.cpp:...] NOT_FOUND` lines per boot in the host's line stream
+is not acceptable for a device whose serial port is a protocol channel.
+`esp_log_level_set()` does not reach them: at this log level the Arduino HAL
+macros call `log_printf` directly and never go through an esp_log tag
+(`cores/esp32/esp32-hal-log.h:159`). Compiling them out is the fix. The
+firmware's own `err:` lines are plain `Serial.println` and are unaffected.
 
 ## 3. Buttons
 
@@ -217,6 +291,14 @@ Personalization:
 - [ ] Boot screen with a name: three lines, correctly spaced, nothing
       overlapping at y=70 / y=106 / y=132.
 - [ ] Boot screen without a name: two lines, unchanged from before.
+- [ ] A name sent over the wire appears on the ambient screen immediately,
+      without a reboot, and on the boot screen after one.
+- [ ] A 24 character name (the cap) still has clear margin on both sides at
+      the extremes of the burn-in drift. The 24 character budget is arithmetic
+      from a measured 10px worst-case glyph; nobody has yet looked at a
+      24 character name on the panel.
+- [ ] A cleared name puts the product name back on the ambient label line and
+      the unit id below it.
 
 Buttons (I cannot press them):
 

@@ -15,9 +15,8 @@ streams newline-delimited JSON over USB serial at 115200.
 | `src/LGFX_TDisplayS3.hpp` | LovyanGFX device config (Bus_Parallel8 + Panel_ST7789 + Light_PWM) |
 | `src/main.cpp` | protocol parser, state machine, ring renderer |
 | `tools/sim.py` | streams a demo protocol sequence at a board over serial |
-| `tools/flash-all.sh` | flashes units 1..14, stamping `UNIT_ID` and `UNIT_NAME` per board |
-| `tools/units.txt` | per-unit owner names, one per line, read by `flash-all.sh` |
-| `AMBIENT.md` | ambient mode, personalization flags, button behaviour |
+| `tools/flash-all.sh` | flashes units 1..14 from one image, stamping only `UNIT_ID` |
+| `AMBIENT.md` | ambient mode, owner name, button behaviour |
 
 Pins, panel offsets and invert flags all come from `../docs/hardware-recon.md`,
 which cites the vendor sources line by line. The palette comes from
@@ -51,20 +50,27 @@ cd firmware
 pio run
 ```
 
-Build one unit's image with its serial number, and optionally its owner's
-name, baked in:
+Build one unit's image with its serial number baked in:
 
 ```sh
 PLATFORMIO_BUILD_FLAGS="-DUNIT_ID=3" pio run
+```
+
+That is the whole per-board build. Owner names are **not** a build input: all
+14 boards flash from one identical image and are named afterwards over the
+wire, with a protocol line carrying `"name"`, which the device stores in NVS.
+See "Naming a unit" below.
+
+`-DUNIT_NAME` still exists, but only as a build-time **default** for anyone who
+does want one baked in:
+
+```sh
 PLATFORMIO_BUILD_FLAGS='-DUNIT_ID=3 -DUNIT_NAME="\"Alex Rivera\""' pio run
 ```
 
-`UNIT_NAME` is optional. The quotes are part of the macro body and PlatformIO
-shlex-splits the environment variable, which is why the inner pair is escaped;
-`tools/flash-all.sh` handles that quoting from `tools/units.txt` for you. With
-a name set the boot screen reads product name / owner name / unit id and the
-ambient screen leads with the owner name. With no name both fall back to the
-unit id, so an unnamed build is a supported configuration, not a broken one.
+The quotes are part of the macro body and PlatformIO shlex-splits the
+environment variable, which is why the inner pair is escaped.
+`tools/flash-all.sh` does not set it.
 
 `UNIT_ID` is not set in `platformio.ini` on purpose, and the environment
 variable appends to (does not replace) the project's own build flags, so a
@@ -90,17 +96,20 @@ pio run -t upload                       # auto-detects the port
 pio run -t upload --upload-port /dev/cu.usbmodem1101
 ```
 
-All 14 units, one at a time, prompting for a board swap between each. Names
-come from `tools/units.txt` (line N is unit N, counting non-comment lines):
+All 14 units, one at a time, prompting for a board swap between each. No names
+are needed or accepted: every board gets the same image, and `-DUNIT_ID=<n>` is
+the only thing that varies.
 
 ```sh
 ./tools/flash-all.sh          # units 1..14
 ./tools/flash-all.sh 5 8      # units 5..8 only
-NAMES_FILE=other.txt ./tools/flash-all.sh
 ```
 
-The file ships with placeholder names. `flash-all.sh` warns on stderr and marks
-`tools/fleet-log.tsv` if it flashes one, so a forgotten edit is not silent.
+It matches the board by USB hwid `303A:1001` rather than by first
+`/dev/cu.usbmodem*`, removes the stale `main.cpp.o` so a build cannot reuse the
+previous unit's `UNIT_ID`, uploads, verifies the greeting off the port, and
+appends a row to `tools/fleet-log.tsv` (unit, USB serial, UTC timestamp,
+`ok` / `no-greeting`).
 
 If a board will not enter download mode: hold **BOOT** (button 1, GPIO 0),
 tap **RST**, release BOOT, then run the upload.
@@ -112,8 +121,55 @@ pio device monitor -b 115200
 pio run -t upload -t monitor            # upload then attach
 ```
 
-On boot the device prints `hello tdisplay-s3 v1`, then `ok` for every line it
-accepts.
+On boot the device prints its greeting, then `ok` for every line it accepts:
+
+```
+hello tdisplay-s3 v1 name="Alex Rivera"
+```
+
+The `hello tdisplay-s3 v1` prefix is unchanged and still exactly what the host
+helper matches on (`/hello\s+tdisplay-s3/i`). The trailing `name="..."` is the
+name the device is actually running with, so a host can read back what a
+`"name"` line did without a second command. It is always quoted, so an unnamed
+board is an unambiguous `name=""`.
+
+## Naming a unit
+
+The recipients' names are not known at flash time, so the name is runtime
+state, not a build flag. Send one line:
+
+```sh
+printf '{"name":"Alex Rivera"}\n' > /dev/cu.usbmodem101
+```
+
+The device stores it in NVS (namespace `codexbuddy`, key `owner`), uses it from
+that instant, and reloads it on every boot. Clear it with an empty string:
+
+```sh
+printf '{"name":""}\n' > /dev/cu.usbmodem101
+```
+
+Precedence, highest first:
+
+1. the name stored in NVS
+2. `-DUNIT_NAME`, if the image was built with one
+3. no name: the screens show the product name and the unit id
+
+Clearing the stored name therefore falls back to `UNIT_NAME` when there is one,
+and to the unnamed screens when there is not.
+
+Two properties worth knowing:
+
+- **Writes are idempotent.** The device only touches flash when the value
+  actually differs from what is stored, so a host that repeats `"name"` in
+  every heartbeat frame costs nothing in flash wear.
+- **The cap is 24 characters**, silently truncated past that. LovyanGFX Font2
+  at text size 1, measured on the panel, has a widest printable-ASCII advance
+  of 10px, and the ambient headline is centred while riding a +/-9px burn-in
+  drift, so 320 - 2*9 = 302px of guaranteed-clear width is 30 worst-case
+  characters. 24 is that ceiling with a deliberate margin: 240px worst case,
+  31px of clear panel each side. Non-ASCII will not render; the built-in
+  LovyanGFX bitmap fonts have no glyphs for it.
 
 ## Feeding it data by hand
 
@@ -147,10 +203,12 @@ device keeps its previous value, so a delta line is legal:
 | `label` | string | small text above the sub line, clamped to 23 chars |
 | `sub` | string | smallest line at the bottom, clamped to 39 chars |
 | `tps` | number | tokens/sec, clamped to 0..10000; shortens the `waiting` pulse |
+| `name` | string | owner name, clamped to 24 chars. Persisted to NVS and used immediately; `""` clears it. The only field whose effect outlives the power cycle. Written to flash only when it differs from what is stored |
 
 Device to host:
 
-- `hello tdisplay-s3 v1` once, after the 2s boot screen
+- `hello tdisplay-s3 v1 name="<active name>"` once, after the 2s boot screen.
+  The prefix through `v1` is fixed; `name` is empty when the unit is unnamed
 - `ok` per accepted line
 - malformed lines are ignored silently, with no reply
 
