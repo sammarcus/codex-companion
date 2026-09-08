@@ -12,7 +12,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { scanConfigToml, silencesApprovals, parseArgs } = require('../codex-companion');
+const {
+  scanConfigToml,
+  silencesApprovals,
+  wouldSilenceApprovals,
+  parseArgs
+} = require('../codex-companion');
 
 const CLI = path.join(__dirname, '..', 'codex-companion.js');
 
@@ -142,7 +147,31 @@ sandbox_mode = "danger-full-access"
     { section: '(top level)', key: 'approval_policy', value: 'never' },
     { section: 'profiles.yolo', key: 'sandbox_mode', value: 'danger-full-access' }
   ]);
-  assert.ok(found.every(silencesApprovals));
+  // The top-level policy is the verdict. The profile line is collected and
+  // shown, but a setting inside a profile only applies when that profile is
+  // selected, so it decides nothing on its own.
+  assert.ok(silencesApprovals(found[0]));
+  assert.ok(!silencesApprovals(found[1]));
+});
+
+test('sandbox_mode is not the approval gate and is never treated as one', () => {
+  // vendor/codex/codex-rs/core/src/exec_policy.rs returns Decision::Prompt for
+  // AskForApproval::UnlessTrusted whatever the FileSystemSandboxKind is, and
+  // assess_patch_safety in core/src/safety.rs returns AskUser for it before
+  // any sandbox test. approval_policy decides; sandbox_mode does not.
+  const found = scanConfigToml(
+    'approval_policy = "untrusted"\nsandbox_mode = "danger-full-access"\n'
+  );
+  assert.strictEqual(found.length, 2);
+  assert.ok(!found.some(silencesApprovals), 'danger-full-access alone must not fail the check');
+});
+
+test('a never inside an unused profile is not the whole config failing', () => {
+  const found = scanConfigToml(
+    'approval_policy = "untrusted"\n\n[profiles.yolo]\napproval_policy = "never"\n'
+  );
+  assert.ok(!found.some(silencesApprovals));
+  assert.ok(wouldSilenceApprovals(found[1]), 'still worth a warning, just not a verdict');
 });
 
 test('doctor does not cry wolf about ordinary settings', () => {
@@ -203,4 +232,66 @@ test('argument parsing is boring and predictable', () => {
   assert.strictEqual(o.dryRun, true);
   assert.strictEqual(parseArgs([]).command, 'run');
   assert.strictEqual(parseArgs(['--help']).help, true);
+});
+
+// --------------------------------------------------------------------------
+// The remedy doctor prints for a stale hook command has to be the one that
+// works. It used to be a lie: install-hook skipped every event that already
+// held one of our handlers, so the dead path survived byte for byte and the
+// program still printed a success line.
+// --------------------------------------------------------------------------
+
+test('install-hook fixes a stale command, which is what doctor tells you to do', (t) => {
+  const home = tmpdir(t);
+  const first = run(['install-hook', '--codex-home', home]);
+  assert.strictEqual(first.status, 0);
+
+  const file = path.join(home, 'hooks.json');
+  const dead = '/opt/homebrew/Cellar/node/25.0.0/bin/node';
+  fs.writeFileSync(
+    file,
+    fs.readFileSync(file, 'utf8').replace(/'[^']*\/node'/g, `'${dead}'`)
+  );
+  assert.ok(fs.readFileSync(file, 'utf8').includes(dead), 'the fixture really is stale');
+
+  const doc = run(['doctor', '--codex-home', home, '--port', '/dev/cu.definitely-not-here']);
+  assert.match(doc.stdout, /FAIL +hook command/);
+
+  const again = run(['install-hook', '--codex-home', home]);
+  assert.strictEqual(again.status, 0);
+  assert.match(again.stdout, /Rewrote the stale command for:/);
+  assert.doesNotMatch(again.stdout, /nothing changed/);
+  assert.ok(
+    !fs.readFileSync(file, 'utf8').includes(dead),
+    'the remedy has to actually remove the dead path'
+  );
+
+  const after = run(['doctor', '--codex-home', home, '--port', '/dev/cu.definitely-not-here']);
+  assert.doesNotMatch(after.stdout, /FAIL +hook command/);
+});
+
+test('install-hook refuses a hooks.json shape it did not write', (t) => {
+  const home = tmpdir(t);
+  const file = path.join(home, 'hooks.json');
+
+  // An event key holding an object instead of an array. The old merge threw
+  // the foreign handler away and said nothing about it.
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ hooks: { PreToolUse: { hooks: [{ type: 'command', command: 'echo mine' }] } } })
+  );
+  const before = fs.readFileSync(file, 'utf8');
+  const res = run(['install-hook', '--codex-home', home]);
+  assert.strictEqual(res.status, 1);
+  assert.match(res.stdout, /not the shape Codex writes/);
+  assert.match(res.stdout, /Refusing to touch it/);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), before, 'echo mine survived untouched');
+
+  // An array root. The old merge rewrote the file identically and still
+  // printed "Registered for: ...".
+  fs.writeFileSync(file, JSON.stringify([{ note: 'a users own file' }]));
+  const arr = run(['install-hook', '--codex-home', home]);
+  assert.strictEqual(arr.status, 1);
+  assert.match(arr.stdout, /top level is an array/);
+  assert.doesNotMatch(arr.stdout, /Registered for/);
 });

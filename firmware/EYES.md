@@ -3,10 +3,20 @@
 The thing on the panel is a creature, not a dashboard. It has two eyes, they
 blink, and they change expression depending on what the session is doing.
 
-Everything here lives in `src/main.cpp`. Nothing is a bitmap: every eye is a
-rounded rect, an arc and a line, so the face scales between the two modes by
-changing four numbers, recolours by changing one, and costs zero bytes of
-flash beyond the code that draws it.
+**This document describes the `rounded` face, which is the default and the one
+fourteen boards ship on.** It is no longer the only one: the drawing moved
+behind an interface, two more designs implement it, and which one a board
+draws is a runtime choice. The interface, the geometry contract, the `face`
+protocol field and how to write a fourth are in `FACES.md`. Everything below
+still holds line for line, because the move was a move: every constant, ratio
+and easing here is the one that was in `src/main.cpp`.
+
+The drawing now lives in `src/FaceRounded.cpp`; the blink driver, the glance
+driver, the state machine, the compositions and the text stayed in
+`src/main.cpp`. Nothing is a bitmap: every eye is a rounded rect, an arc and a
+line, so the face scales between the two modes by changing four numbers,
+recolours by changing one, and costs zero bytes of flash beyond the code that
+draws it.
 
 ## 1. Why a face
 

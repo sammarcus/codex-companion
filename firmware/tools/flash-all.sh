@@ -15,6 +15,15 @@
 #   ./tools/flash-all.sh          # units 1..14
 #   ./tools/flash-all.sh 5 8      # units 5..8 only
 #
+# Every board is RE-ARMED before it is called done. This is not optional and
+# it is not tidiness: flashing and verifying both power the board, each
+# power-on plays the 8.6 second out-of-the-box sequence, and the sequence
+# spends its own NVS flag at the end of the last one. A run without this step
+# ships fourteen boards that have already had their first run, and the
+# recipient opens the box to the calm ambient face instead of a creature waking
+# up. See ../FIRSTRUN.md and ../../docs/wednesday-runbook.md ("the order is
+# fixed: flash, name, verify, arm, unplug, box").
+#
 # Nothing here runs during a build; it is operator tooling for assembly day.
 
 set -euo pipefail
@@ -128,6 +137,71 @@ finally:
 PY
 }
 
+# Re-arm the out-of-the-box sequence, and prove it took.
+#
+# Everything above this point has powered the board at least twice: esptool
+# hard-resets it after upload, and verify_hello pulses DTR and RTS to read its
+# own boot. Each of those plays the sequence, and spendFirstRun() writes the
+# spent flag at the 8600ms mark, so by now the flag is set and the recipient's
+# one moment is gone. {"reset":"firstrun"} removes it and touches nothing else:
+# not the owner name, not the face, not the records.
+#
+# Same three workarounds as verify_hello, for the same reasons: our own read
+# deadline, and the `{}` nudge for a transmit path that runs one message
+# behind. The board is NOT reset here, because a reset would play the sequence
+# again and spend the flag we just restored.
+arm_firstrun() {
+  local port="$1"
+  python3 - "$port" <<'PY'
+import os, sys, time
+
+port, want = sys.argv[1], "reset: firstrun"
+try:
+    fd = os.open(port, os.O_RDWR | os.O_NONBLOCK | os.O_NOCTTY)
+except OSError as e:
+    print("could not open %s: %s" % (port, e), file=sys.stderr)
+    sys.exit(1)
+
+try:
+    os.write(fd, b'{"reset":"firstrun"}\n')
+    deadline = time.time() + 10.0
+    seen = ""
+    last_nudge = time.time()
+    while time.time() < deadline:
+        now = time.time()
+        if now - last_nudge > 1.0:
+            try:
+                os.write(fd, b"{}\n")
+            except OSError:
+                pass
+            last_nudge = now
+        try:
+            chunk = os.read(fd, 512)
+        except BlockingIOError:
+            time.sleep(0.05)
+            continue
+        except OSError as e:
+            print("read error: %s" % e, file=sys.stderr)
+            sys.exit(1)
+        if chunk:
+            seen += chunk.decode("utf-8", "replace")
+            for line in seen.splitlines():
+                if want in line:
+                    print(line.strip())
+                    # "ram-only" means NVS refused the write: the flag is armed
+                    # in RAM for this power cycle only and dies with the unplug
+                    # that comes next. That board is not shippable.
+                    sys.exit(0 if "ok" in line else 1)
+        else:
+            time.sleep(0.05)
+
+    print("no arm notice within 10s, last bytes: %r" % seen[-200:], file=sys.stderr)
+    sys.exit(1)
+finally:
+    os.close(fd)
+PY
+}
+
 wait_for_port() {
   local waited=0 port=""
   while [ "$waited" -lt "$WAIT_TIMEOUT" ]; do
@@ -184,19 +258,36 @@ for unit in $(seq "$FIRST" "$LAST"); do
     pio run -e "$ENV_NAME" -t upload --upload-port "$port"
 
   serial="$(port_serial "$port")"
+  status="ok"
   if verify_hello "$port"; then
     echo "unit $unit verified: board greeted over serial"
-    printf '%s\t%s\t%s\t%s\n' "$unit" "$serial" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "ok" >> tools/fleet-log.tsv
+    # Arming is the LAST thing done to the board, because anything that powers
+    # it after this spends the flag again. Nothing below this line resets it.
+    if arm_firstrun "$port"; then
+      echo "unit $unit armed: the next power-on plays the first run"
+    else
+      echo "unit $unit FLASHED BUT NOT ARMED. Set it aside." >&2
+      status="no-arm"
+    fi
   else
     echo "unit $unit FLASHED BUT DID NOT GREET. Set it aside." >&2
-    printf '%s\t%s\t%s\t%s\n' "$unit" "$serial" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "no-greeting" >> tools/fleet-log.tsv
+    status="no-greeting"
   fi
+  printf '%s\t%s\t%s\t%s\n' "$unit" "$serial" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" >> tools/fleet-log.tsv
 
-  echo "unit $unit flashed. Unplug it."
+  if [ "$status" != "ok" ]; then
+    echo "unit $unit is NOT shippable as it stands. Unplug it and keep it separate."
+  else
+    echo "unit $unit flashed, verified and armed. Unplug it."
+  fi
   if ! wait_for_no_port; then
     echo "board still present after ${WAIT_TIMEOUT}s; continuing anyway." >&2
   fi
 done
 
 echo
-echo "All units $FIRST..$LAST flashed."
+echo "All units $FIRST..$LAST flashed, verified and ARMED."
+echo "Armed means the next power-on plays the 8.6 second first run, once."
+echo "Anything that powers a board again before it is boxed spends it:"
+echo "  re-arm with  printf '{\"reset\":\"firstrun\"}\\n' > /dev/cu.usbmodemXXXX"
+echo "Check tools/fleet-log.tsv: only rows marked ok are shippable."

@@ -462,10 +462,11 @@ means "this turn ended", not "the session ended". An interactive session goes ba
   this is the latest active context size; for `total_token_usage`, this is the accumulated
   session total." `usage` on a `token_usage_record` is the per-response analogue of
   `last_token_usage` (`protocol.rs:2237-2247`), which is why it is the fallback rather than
-  `thread_token_usage`. `helper/src/codex-watcher.js` keeps the two in separate fields for
-  exactly this reason: `contextTokens` (fed from `last_token_usage` / `usage`) is what reaches
-  `contextFill()` and the ring, `totalTokens` (fed from the cumulative figures) is display-only
-  accounting and never touches the ring.
+  `thread_token_usage`. `applyUsage` in `helper/codex-companion.js` keeps the two in separate
+  fields for exactly this reason: `contextTokens` (fed from `last_token_usage` / `usage`) is what
+  reaches `contextFill()` and the ring, `totalTokens` (fed from the cumulative figures) is
+  display-only accounting and never touches the ring. (There is no `helper/src/` directory and
+  no `codex-watcher.js`; an earlier revision of this document cited both.)
 
   Codex's own formula is **not** `used/W`. From `TokenUsage::percent_of_context_window_remaining`
   (`protocol.rs:2428`) with `BASELINE_TOKENS = 12000` (`protocol.rs:2394`):
@@ -493,9 +494,10 @@ means "this turn ended", not "the session ended". An interactive session goes ba
   reading it again at `task_complete`. `TurnCompleteEvent` (`protocol.rs:2141-2164`) carries
   exactly `turn_id`, `last_agent_message`, `error`, `started_at`, `completed_at`, `duration_ms`
   and `time_to_first_token_ms`, and nothing else: `turn_token_usage` lives on
-  `token_usage_record` (section 5), not here. This is what `helper/src/codex-watcher.js` ships
-  (`_turnStartTokensOut`, set in the `task_started` branch, differenced in the
-  `TURN_COMPLETE` branch).
+  `token_usage_record` (section 5), not here. The turn-delta logic lives in `applyEvent` in
+  `helper/codex-companion.js`. (An earlier revision of this document cited
+  `helper/src/codex-watcher.js` and a `_turnStartTokensOut` field. Neither the
+  file nor the symbol exists.)
   Label it derived. It is an average over the interval, not an instantaneous rate, and it excludes
   time spent in tool calls.
 

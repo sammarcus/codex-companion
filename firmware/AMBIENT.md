@@ -124,8 +124,8 @@ The protocol gained one optional field, `name`, on the same JSON line as
 everything else:
 
 ```sh
-printf '{"name":"Alex Rivera"}\n' > /dev/cu.usbmodem101
-printf '{"name":""}\n'            > /dev/cu.usbmodem101   # clear it
+printf '{"name":"Alex Rivera"}\n' > /dev/cu.usbmodemXXXX
+printf '{"name":""}\n'            > /dev/cu.usbmodemXXXX   # clear it
 ```
 
 A non-empty `name` is stored in NVS and used from that frame on. An empty
@@ -198,6 +198,17 @@ leaving 31px of clear panel on each side at the drift extreme. For scale, the
 same probe measured `Alexandra Rivera-Smith` (22 characters) at 143px and 24
 lowercase `m` at 192px.
 
+The cap is enforced **after** the name goes through the message card's
+sanitiser, which keeps printable ASCII (0x20..0x7E) and drops everything else.
+That is what makes 24 a number about characters rather than about bytes: the
+clamp is a byte loop, so before the sanitiser a name written with real accents
+stored at half the documented length, and one that hit the cap mid-sequence
+stored a dangling UTF-8 lead byte that the panel and the boot greeting both
+carried. The fonts here have no glyphs outside that range, so an accent has
+nothing honest to draw either way; it is now dropped visibly instead of
+mangled silently. A name with nothing printable in it is refused rather than
+being read as a clear.
+
 Non-ASCII will not render: the built-in LovyanGFX bitmap fonts have no glyphs
 beyond ASCII.
 
@@ -209,7 +220,7 @@ hello tdisplay-s3 v1 name="Alex Rivera"
 
 The `hello tdisplay-s3 v1` prefix is byte-for-byte what it was. The host helper
 tests `/hello\s+tdisplay-s3/i` in `cmdDoctor`
-(`helper/codex-companion.js:1131`, the `handshake` line), and
+(`helper/codex-companion.js`, the `handshake` check), and
 `tools/flash-all.sh`'s `verify_hello` tests `"hello tdisplay-s3" in seen`; both
 are substring tests, so the suffix is invisible to them.
 
@@ -271,7 +282,7 @@ firmware's own `err:` lines are plain `Serial.println` and are unaffected.
 
 ## 3. Buttons
 
-### Button 1, GPIO 0 (the BOOT button): acknowledge, then brightness
+### Button 1, GPIO 0 (the BOOT button): acknowledge, then the stats screen
 
 New: a press while the rendered state is `waiting`, and the device is in live
 mode and not already acknowledged, sets `waitAcked`. The impatient pulse stops:
@@ -287,11 +298,18 @@ the renderer clears it whenever the effective state is no longer `waiting`,
 which covers the 30s staleness fallback pulling the display off `waiting`
 without any line arriving. The next `waiting` therefore starts impatient again.
 
-Everything button 1 did before is intact. A press when there is nothing to
-acknowledge, and a second press when a prompt is already acknowledged, both
-fall through to the original behaviour: wake to full brightness if the auto
-ladder had dimmed the panel, otherwise step the brightness 255 -> 160 -> 70 ->
-20 -> 255. The button is never a dead key.
+**Superseded by the stats screen.** A press when there is nothing to
+acknowledge now opens the stats screen instead of stepping the brightness, on
+the release edge rather than the press. It still wakes a panel the auto ladder
+had dimmed, exactly as an ack does, so the "poke the dim board and it lights
+up" gesture survives.
+
+The brightness fallback survives too, in the one case the numbers cannot be
+shown: a second press during a prompt that is already acknowledged is refused
+by `statsEnter` and falls straight through to the original wake-to-full,
+otherwise step 255 -> 160 -> 70 -> 20 -> 255. The button is still never a dead
+key. See `README.md`, "The button model, again", for what that trade cost and
+why brightness is button 2's job now.
 
 ### Button 2, GPIO 14: brightness
 
@@ -306,6 +324,31 @@ Pin 14 is from `docs/hardware-recon.md` line 34, which cites
 `#define`d in `src/LGFX_TDisplayS3.hpp`. The `INPUT_PULLUP` wiring matches
 every vendor example that reads it (`T-Display-S3-Queue`, `BLE-Sender`,
 `Piano-Debug`).
+
+### Both buttons tapped together: do not disturb
+
+Both switches down at the same time for 120ms and released before the
+FACTORY RESET warning appears at 1.5s puts a DO NOT DISTURB sign on the panel, and **any single
+press** takes it down again. It is the one gesture on this device aimed at
+somebody else in the room, and the only one that needs no host and no
+explanation.
+
+Two properties of the shape, both deliberate:
+
+- The chord is **resolved on the first release**, not at its threshold, which
+  makes it the only gesture here that does not fire the moment a timer expires.
+  It has to be: the same two switches held five seconds longer are the factory
+  reset, and putting a sign up on the way to wiping a board is the same
+  surprise that already stops button 2 swapping the face on that journey.
+- Entry and exit are **not symmetric on purpose**. Two thumbs to raise, one
+  finger to lower. A stray press must never plant a sign on somebody's desk,
+  and a mode with no obvious way out is the worse of the two failures by a
+  distance: see `docs/prior-art-status-light.md` on the hooks port that latches
+  amber forever because no event exists to clear it.
+
+Full reasoning, the composition and the measured cost are in
+`README.md` under "Do not disturb". The same thing over the wire is
+`{"dnd":true}` / `{"dnd":false}`, `docs/protocol.md` section 2.10.
 
 ## 4. What a human still has to look at
 
@@ -363,9 +406,19 @@ Buttons (I cannot press them):
 - [ ] The ack drops on the next state change and the following `waiting`
       pulses again.
 - [ ] A second press of button 1 during an acknowledged wait steps the
-      brightness rather than doing nothing.
+      brightness rather than doing nothing. (The stats screen is refused while
+      a prompt is pending, which is exactly what leaves the brightness step
+      reachable here.)
+- [ ] A press of button 1 with nothing to acknowledge opens the stats screen,
+      and a second press goes on to the focus timer. Button 2 closes.
 - [ ] Button 2 steps the brightness one tier per press, all four tiers
       reachable in a loop.
+- [ ] Both buttons tapped together raise the DO NOT DISTURB sign, and neither
+      one alone ever does, however clumsily it is pressed.
+- [ ] Any single press takes the sign down, and does nothing else on the way:
+      no brightness step, no face swap.
+- [ ] Travelling to the five second factory reset does not raise the sign at
+      any point on the way there.
 - [ ] Neither button is fouled by the case.
 
 Live states, which I confirmed only as protocol acks:

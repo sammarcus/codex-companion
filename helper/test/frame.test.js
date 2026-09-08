@@ -153,3 +153,32 @@ test('the metric-only frame carries no state, so the hook keeps owning it', () =
   assert.strictEqual(f.state, undefined);
   assert.strictEqual(JSON.parse(frameToLine(f)).state, undefined);
 });
+
+test('the stats fields ride along on every metric frame', () => {
+  const f = metricFields({ ctxFill: 0.4, totalTokens: 812345 }, NOW);
+  // Local, not UTC: the board asks "has midnight happened where the owner is",
+  // and it has no timezone database to answer that from UTC.
+  const offsetSec = new Date(NOW).getTimezoneOffset() * 60;
+  assert.strictEqual(f.time, Math.floor(NOW / 1000) - offsetSec);
+  assert.strictEqual(f.tokens, 812345);
+});
+
+test('a session with no token total sends no token field at all', () => {
+  const f = metricFields({ ctxFill: 0.4 }, NOW);
+  assert.ok(Object.prototype.hasOwnProperty.call(f, 'time'));
+  assert.strictEqual(f.tokens, undefined);
+});
+
+test('frameToLine keeps time and tokens as integers and drops nonsense', () => {
+  const good = JSON.parse(
+    frameToLine({ state: 'busy', time: 1788850592.7, tokens: 1234567.9 })
+  );
+  assert.strictEqual(good.time, 1788850592);
+  assert.strictEqual(good.tokens, 1234567);
+
+  const bad = JSON.parse(
+    frameToLine({ state: 'busy', time: 0, tokens: -5 })
+  );
+  assert.strictEqual(bad.time, undefined);
+  assert.strictEqual(bad.tokens, undefined);
+});
