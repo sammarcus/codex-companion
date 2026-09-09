@@ -4,602 +4,126 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Codex Desk Companion</title>
-<meta name="description" content="A small thing on your desk that shows your Codex session as a face, and tells you across the room when your agent is waiting on you.">
-<link rel="canonical" href="https://sa.mmarc.us/codex-companion.html">
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://sa.mmarc.us/codex-companion.html">
-<meta property="og:title" content="Codex Desk Companion">
-<meta property="og:description" content="A small thing on your desk that shows your Codex session as a face, and tells you across the room when your agent is waiting on you.">
-<meta property="og:image" content="https://sa.mmarc.us/codex-companion-card.png">
-<meta property="og:image:alt" content="The companion's screen, showing the resting face.">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Codex Desk Companion">
-<meta name="twitter:description" content="A small thing on your desk that shows your Codex session as a face, and tells you across the room when your agent is waiting on you.">
-<meta name="twitter:image" content="https://sa.mmarc.us/codex-companion-card.png">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
   :root {
-    --panel:      #05070a;
-    --ground:     #f2f3f5;
-    --surface:    #ffffff;
-    --edge:       #d8dbe0;
-    --ink:        #14181e;
-    --ink-soft:   #5a626e;
-    --ink-faint:  #8b929c;
-    --idle:       #4aa3ff;
-    --waiting:    #ffb020;
-    --done:       #39d98a;
-    --asleep:     #4a5768;
-    --accent:     #2f7fd4;
-
+    --bg:    #0a0d12;
+    --card:  #12161d;
+    --edge:  #222932;
+    --ink:   #e7eaef;
+    --soft:  #a0a8b4;
+    --faint: #6b7481;
+    --blue:  #4aa3ff;
     --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-
-    --measure: 66ch;
-    --rule: 1px solid var(--edge);
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   }
-
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --ground:    #0a0d12;
-      --surface:   #12161d;
-      --edge:      #222932;
-      --ink:       #e7eaef;
-      --ink-soft:  #a0a8b4;
-      --ink-faint: #6b7481;
-      --accent:    #6fb4ff;
-    }
-  }
-  :root[data-theme="dark"] {
-    --ground:    #0a0d12;
-    --surface:   #12161d;
-    --edge:      #222932;
-    --ink:       #e7eaef;
-    --ink-soft:  #a0a8b4;
-    --ink-faint: #6b7481;
-    --accent:    #6fb4ff;
-  }
-
   * { box-sizing: border-box; }
-
   body {
     margin: 0;
-    background: var(--ground);
+    background: var(--bg);
     color: var(--ink);
-    font-family: var(--sans);
-    font-size: 16px;
-    line-height: 1.62;
+    font: 17px/1.6 var(--sans);
     -webkit-font-smoothing: antialiased;
   }
+  main { max-width: 30rem; margin: 0 auto; padding: 40px 24px 72px; }
 
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 100px; }
-  .col  { max-width: var(--measure); }
+  h1 { font-size: 30px; line-height: 1.15; letter-spacing: -.02em; margin: 0 0 10px; }
+  .sub { color: var(--soft); margin: 0 0 30px; }
 
-  /* ---------- masthead ---------- */
-
-  header.mast {
-    display: flex;
-    align-items: baseline;
-    gap: 16px;
-    flex-wrap: wrap;
-    padding: 34px 0 28px;
-    border-bottom: var(--rule);
-    margin-bottom: 44px;
-  }
-  .mark {
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: .16em;
-    text-transform: uppercase;
-    color: var(--ink);
-  }
-  .mast .meta {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--ink-faint);
-    letter-spacing: .04em;
-    margin-left: auto;
-  }
-
-  /* ---------- type ---------- */
-
-  h1 {
-    font-size: clamp(34px, 5.2vw, 54px);
-    line-height: 1.06;
-    letter-spacing: -.026em;
-    font-weight: 700;
-    margin: 0 0 18px;
-    text-wrap: balance;
-  }
-  h2 {
-    font-size: 15px;
-    font-family: var(--mono);
-    font-weight: 600;
-    letter-spacing: .13em;
-    text-transform: uppercase;
-    color: var(--ink-soft);
-    margin: 0 0 22px;
-    padding-bottom: 10px;
-    border-bottom: var(--rule);
-  }
-  h3 {
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: -.01em;
-    margin: 0 0 8px;
-  }
-  p { margin: 0 0 18px; }
-  .lede { font-size: 19px; line-height: 1.58; color: var(--ink-soft); }
-  strong { font-weight: 600; color: var(--ink); }
-  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
-  a:focus-visible, button:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 3px;
-  }
-
-  section { margin-bottom: 68px; }
-
-  code {
-    font-family: var(--mono);
-    font-size: .88em;
-    background: var(--surface);
-    border: var(--rule);
-    border-radius: 4px;
-    padding: 1px 5px;
-  }
-  pre {
-    font-family: var(--mono);
-    font-size: 13px;
-    line-height: 1.7;
-    background: var(--surface);
-    border: var(--rule);
-    border-radius: 8px;
-    padding: 16px 18px;
-    overflow-x: auto;
-    margin: 0 0 18px;
-  }
-  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
-  pre .c { color: var(--ink-faint); }
-
-  /* ---------- the device ---------- */
-
-  .stage {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 380px);
-    gap: 44px;
-    align-items: center;
-    margin-bottom: 68px;
-  }
-  @media (max-width: 860px) {
-    .stage { grid-template-columns: 1fr; gap: 30px; }
-  }
-
-  .bezel {
+  .device {
     background: #14171c;
-    border-radius: 16px;
-    padding: 22px 18px;
-    box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 18px 44px rgba(0,0,0,.34);
-    position: relative;
+    border-radius: 14px;
+    padding: 18px 14px;
+    margin-bottom: 34px;
+    box-shadow: 0 14px 34px rgba(0,0,0,.4);
   }
-  .bezel canvas {
+  .device canvas {
     display: block;
     width: 100%;
     height: auto;
     aspect-ratio: 320 / 170;
-    background: var(--panel);
-    border-radius: 4px;
-  }
-  .bezel .usb {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    bottom: -7px;
-    width: 44px;
-    height: 8px;
-    border-radius: 0 0 4px 4px;
-    background: #2a2f37;
-  }
-
-  .controls {
-    display: flex;
-    gap: 7px;
-    flex-wrap: wrap;
-    margin-top: 20px;
-  }
-  button {
-    font-family: var(--mono);
-    font-size: 12px;
-    letter-spacing: .07em;
-    text-transform: uppercase;
-    color: var(--ink-soft);
-    background: var(--surface);
-    border: var(--rule);
-    border-radius: 6px;
-    padding: 7px 12px;
-    cursor: pointer;
-    transition: color .12s, border-color .12s;
-  }
-  button:hover { color: var(--ink); border-color: var(--ink-faint); }
-  button[aria-pressed="true"] {
-    color: var(--panel);
-    background: var(--sel, var(--idle));
-    border-color: transparent;
-    font-weight: 600;
-  }
-  :root[data-theme="dark"] button[aria-pressed="true"],
-  :root:not([data-theme="light"]) button[aria-pressed="true"] { color: #05070a; }
-
-  /* ---------- states ---------- */
-
-  .states { display: grid; gap: 0; border-top: var(--rule); }
-  .state {
-    display: grid;
-    grid-template-columns: 128px 92px minmax(0, 1fr);
-    gap: 22px;
-    align-items: center;
-    padding: 18px 0;
-    border-bottom: var(--rule);
-  }
-  @media (max-width: 700px) {
-    .state { grid-template-columns: 104px minmax(0, 1fr); }
-    .state .sname { grid-column: 2; }
-    .state .sdesc { grid-column: 1 / -1; }
-  }
-  .state canvas {
-    width: 128px;
-    aspect-ratio: 320 / 170;
-    height: auto;
-    background: var(--panel);
+    background: #05070a;
     border-radius: 3px;
-    display: block;
   }
-  @media (max-width: 700px) { .state canvas { width: 104px; } }
-  .sname {
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: .05em;
-  }
-  .sdot {
-    display: inline-block;
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    margin-right: 7px;
-    vertical-align: 1px;
-  }
-  .sdesc { color: var(--ink-soft); font-size: 15px; }
 
-  /* ---------- the timeline ---------- */
-
-  .tl {
-    border-top: var(--rule);
-    font-variant-numeric: tabular-nums;
-  }
-  .beat {
-    display: grid;
-    grid-template-columns: 92px 1fr;
-    gap: 24px;
-    padding: 15px 0;
-    border-bottom: var(--rule);
-    align-items: start;
-  }
-  .beat .t {
-    font-family: var(--mono);
+  h2 {
     font-size: 13px;
-    color: var(--ink-faint);
-    padding-top: 2px;
-  }
-  .beat .t b { color: var(--ink); font-weight: 600; }
-  .beat h3 { font-size: 16px; margin-bottom: 4px; }
-  .beat p { margin: 0; color: var(--ink-soft); font-size: 15px; }
-  .beat.key { background: linear-gradient(90deg, color-mix(in srgb, var(--idle) 9%, transparent), transparent 62%); }
-  .beat.key h3::after {
-    content: "the beat it exists for";
     font-family: var(--mono);
-    font-size: 10px;
-    letter-spacing: .1em;
+    letter-spacing: .12em;
     text-transform: uppercase;
-    color: var(--idle);
-    margin-left: 10px;
-    vertical-align: 2px;
+    color: var(--faint);
+    margin: 34px 0 10px;
   }
+  p { margin: 0 0 14px; }
+  p.small { font-size: 15px; color: var(--soft); }
 
-  /* ---------- claims ---------- */
-
-  .claims { display: grid; gap: 1px; background: var(--edge); border: var(--rule); border-radius: 10px; overflow: hidden; }
-  .claim { background: var(--ground); padding: 20px 22px; }
-  .claim h3 { font-size: 15px; margin-bottom: 5px; }
-  .claim p { margin: 0; font-size: 14.5px; color: var(--ink-soft); }
-  .claim .how { font-family: var(--mono); font-size: 12.5px; margin-top: 9px; color: var(--ink-faint); }
-
-  .note {
-    border-left: 2px solid var(--waiting);
-    padding: 2px 0 2px 18px;
-    color: var(--ink-soft);
-    font-size: 15px;
+  pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.65;
+    background: var(--card);
+    border: 1px solid var(--edge);
+    border-radius: 8px;
+    padding: 13px 15px;
+    overflow-x: auto;
+    margin: 0 0 14px;
+    color: var(--ink);
   }
+  a { color: var(--blue); }
 
   footer {
-    border-top: var(--rule);
-    padding-top: 22px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--ink-faint);
-    letter-spacing: .03em;
+    margin-top: 44px;
+    padding-top: 18px;
+    border-top: 1px solid var(--edge);
+    font-size: 14px;
+    color: var(--faint);
   }
-
-  @media (prefers-reduced-motion: reduce) {
-    * { animation: none !important; transition: none !important; }
-  }
+  footer a { color: var(--soft); }
 </style>
 </head>
 <body>
+<main>
 
-<div class="wrap">
+  <h1>It already works.</h1>
+  <p class="sub">Plug it into any USB port, charger or battery. No app, no account, no setup.</p>
 
-<header class="mast">
-  <span class="mark">Codex Desk Companion</span>
-  <span class="meta">LILYGO T-Display-S3 &middot; 320&times;170 &middot; USB</span>
-</header>
-
-<div class="stage">
-  <div class="col">
-    <h1>A small thing on your desk that knows when your agent needs you.</h1>
-    <p class="lede">It watches your Codex session and shows it as a face. Mostly it sits there
-    calmly. When your agent is waiting on a decision, you know from across the room.</p>
-    <p>Plug it into any USB port or charger and it works. There is no app, no account,
-    no pairing, and no network of any kind. The software further down this page is a bonus
-    you can ignore forever.</p>
-    <p>The two buttons carry the rest of it with nothing attached: a do-not-disturb sign,
-    the day's counters, a pomodoro, and a game to play through a long turn.</p>
+  <div class="device">
+    <!-- PHOTO: swap this canvas for a real photograph of the finished unit,
+         once one exists. Suggested path: img/device.jpg -->
+    <canvas id="panel" width="640" height="340"
+            role="img" aria-label="The device screen, showing a blinking face"></canvas>
   </div>
 
-  <div>
-    <div class="bezel">
-      <!-- PHOTO: replace this canvas with a real photograph of the finished unit on a desk,
-           shot at a slight angle with the panel lit, once the fleet is assembled.
-           Suggested path: site/img/device-on-desk.jpg -->
-      <canvas id="hero" width="640" height="340" role="img"
-              aria-label="The device panel, showing an animated face waking up"></canvas>
-      <div class="usb"></div>
-    </div>
-    <div class="controls">
-      <button id="replay" type="button">Replay the first run</button>
-    </div>
-  </div>
-</div>
+  <p>It sits on your desk and blinks. When you run the optional program below, it
+  starts showing what your Codex session is doing, and gets your attention when
+  Codex is waiting on a decision from you.</p>
 
-<section>
-  <h2>The five states</h2>
-  <div class="col" style="margin-bottom:26px">
-    <p>The face is the whole interface. Each state has an expression, and the ring beneath it
-    carries the number when a host is connected. Nothing here needs reading, which is the point:
-    you catch it in peripheral vision while you are doing something else.</p>
-    <p>These five are what a host drives. With nothing on the other end of the cable, or after
-    five minutes of silence from something that was there, it runs an ambient screen of its own
-    instead, so a board on a desk with no software never sits looking asleep or broken.</p>
-  </div>
-  <div class="states" id="states"></div>
-</section>
+  <h2>Put your name on it</h2>
+  <pre>ls /dev/cu.usbmodem*
+printf '{"name":"Your Name"}\n' &gt; /dev/cu.usbmodemXXXX</pre>
+  <p class="small">Use whichever path the first command printed. It remembers.</p>
 
-<section>
-  <h2>The first time you plug it in</h2>
-  <div class="col" style="margin-bottom:26px">
-    <p>A brand new board plays this once, then never again. The flag that arms it lives in a
-    region of flash that reflashing does not touch, so every unit can be built, tested and
-    powered a dozen times and still owe its owner the whole thing.</p>
-    <p>It is a creature waking up, not a device starting. It takes about nine seconds, it says
-    three things (<code>Hi OpenAI</code>, your name, <code>hello</code>), and it needs no
-    software to happen.</p>
-  </div>
-  <div class="tl" id="timeline"></div>
-</section>
+  <h2>Optional: your live Codex session</h2>
+  <pre>npx github:sammarcus/codex-companion</pre>
+  <p class="small">One file, no dependencies, nothing installed. It reads counters
+  and timestamps, never your code or your prompts, and it can never approve
+  anything on your behalf. Ctrl-C ends it completely.</p>
 
-<section>
-  <h2>The optional program</h2>
-  <div class="col">
-    <p>If you want the device to follow your actual Codex session, there is one command. npm
-    fetches the repository, caches it under <code>~/.npm/_npx</code> and runs it from there.
-    Nothing goes on your PATH, nothing is installed globally, and nothing is written to your
-    Codex config until you run <code>install-hook</code>. Delete the cache with
-    <code>rm -rf ~/.npm/_npx</code>. It is one file, small enough to read in full first.</p>
-  </div>
-  <div class="claims" style="margin:26px 0">
-    <div class="claim">
-      <h3>It cannot approve anything</h3>
-      <p>It registers as a Codex hook so it learns when your agent is waiting. Hooks may return a
-      decision, and this one always declines to, twice over: it writes nothing to standard output,
-      and it registers asynchronously, either of which alone makes Codex discard a verdict. You
-      still approve in your own terminal.</p>
-      <p class="how">grep -n 'stdout.write' the file: three hits, all usage printing, none in cmdHook</p>
-    </div>
-    <div class="claim">
-      <h3>It reads counters, not content</h3>
-      <p>Token counts, timestamps and state names. It never retains the text of your prompts, your
-      code, or the model's replies. A test in the suite walks everything it extracts and fails if
-      any value is a string.</p>
-      <p class="how">npm test, then read helper/test/metrics.test.js</p>
-    </div>
-    <div class="claim">
-      <h3>It has no dependencies and no network</h3>
-      <p>One file, four imports, all from the Node standard library. There is no HTTP client
-      anywhere in it, and closing the terminal ends it completely.</p>
-      <p class="how">grep for require of http, https, net, tls, dns, or fetch</p>
-    </div>
-  </div>
-  <div class="col">
-    <p>Run it in the foreground, watch it, and stop it with Ctrl-C:</p>
-  </div>
-  <pre><code>npx github:sammarcus/codex-companion
+  <footer>
+    Source and the longer version:
+    <a href="https://github.com/sammarcus/codex-companion">github.com/sammarcus/codex-companion</a><br>
+    Anything at all: <a href="mailto:sam.marcus@me.com">sam.marcus@me.com</a>
+  </footer>
 
-<span class="c"># or look before you leap: what it can see, changing nothing</span>
-npx github:sammarcus/codex-companion doctor</code></pre>
-</section>
-
-<section>
-  <h2>Faces are swappable</h2>
-  <div class="col">
-    <p>The drawing sits behind an interface. A face receives how open the eyes should be, where the
-    gaze is pointed, the state and a colour, and draws. It never decides when to blink, and it
-    never touches the state machine, the transitions or the layout.</p>
-    <p>Three ship. Hold the second button for about a second to cycle them, or send one over the
-    wire. The choice persists, so changing the look needs no reflash.</p>
-  </div>
-  <pre><code>printf '{"face":"bear"}\n' &gt; /dev/cu.usbmodem&lt;N&gt;</code></pre>
-  <div class="col">
-    <p class="note">One trap, learned on hardware and worth knowing before you write your own: a
-    half-width that computes to a non-numeric value passes every minimum check and then hands the
-    graphics library a radius it never returns from. The board greets and then goes silent
-    forever. Clamp the base of any exponent.</p>
-  </div>
-</section>
-
-<section>
-  <h2>Everything the device speaks</h2>
-  <div class="col">
-    <p>One JSON object per line at 115200 baud. Every field is optional and the device keeps the
-    last value it was given, so you can send one key and change one thing. That is the whole
-    protocol, which means anything that can write to a serial port can drive this.</p>
-  </div>
-  <pre><code>{"state":"waiting","ring":0.62,"center":"62%","label":"CTX","sub":"your turn"}</code></pre>
-  <div class="col">
-    <p>It answers <code>ok</code> per accepted line, and greets on boot with its stored name.
-    One quirk to design around: the chip's transmit runs a message behind, so an acknowledgement
-    usually arrives only once the next line is written. Never build a blocking handshake on it.</p>
-  </div>
-</section>
-
-<footer>
-  Built for fourteen people. One binary, one hash, no unit compiled differently from any other.
-  Source at <a href="https://github.com/sammarcus/codex-companion">github.com/sammarcus/codex-companion</a>.
-</footer>
-
-</div>
+</main>
 
 <script>
 (function () {
   "use strict";
+  var c = document.getElementById("panel"), g = c.getContext("2d");
+  var W = c.width, H = c.height, s = W / 320;
 
-  var COL = {
-    idle:    "#4aa3ff",
-    busy:    "#4aa3ff",
-    waiting: "#ffb020",
-    done:    "#39d98a",
-    sleep:   "#4a5768"
-  };
-
-  // The rounded face, following the shipping firmware: two rounded rectangles,
-  // a highlight, brows that only appear when it wants you, and a lid line when
-  // it is asleep. Geometry is expressed against a 320x170 panel and scaled.
-  function drawFace(g, W, H, t, state, open, col, opt) {
-    opt = opt || {};
-    var s = W / 320;
-    g.save();
-    g.scale(s, s);
-    var w = 320, h = W ? (H / s) : 170;
-
-    var cx = w / 2, cy = h / 2 - 4;
-    var eyeW = 46, eyeH = 60, gap = 62;
-    var hop = 0, brow = 0, happy = 0, lid = 1;
-
-    var breathe = 0.5 + 0.5 * Math.sin(t / 1200);
-
-    if (state === "busy") {
-      lid = 0.62;
-      cx += Math.sin(t / 1700) * 6.5;
-      cy += Math.sin(t / 2600) * 2.0;
-    } else if (state === "waiting") {
-      eyeW = 50; eyeH = 68;
-      var pulse = 0.5 + 0.5 * Math.sin(t / 450);
-      hop = -3 * pulse;
-      brow = 1;
-    } else if (state === "done") {
-      happy = 1;
-    } else if (state === "sleep") {
-      lid = 0.05;
-      cy += -1.6 + 3.2 * breathe;
-    } else {
-      cx += Math.sin(t / 2600) * 7;
-      eyeH = eyeH * (1 + 0.05 * breathe);
-    }
-
-    var o = Math.max(0.04, open * lid);
-    cy += hop;
-
-    for (var i = 0; i < 2; i++) {
-      var ex = cx + (i ? gap : -gap);
-
-      if (happy) {
-        // a happy squint: an upward bow
-        g.strokeStyle = col;
-        g.lineWidth = 11;
-        g.lineCap = "round";
-        g.beginPath();
-        g.arc(ex, cy + 12, 24, Math.PI * 1.16, Math.PI * 1.84);
-        g.stroke();
-        continue;
-      }
-
-      var eh = eyeH * o;
-      if (eh < 5) {
-        // asleep: the lid line
-        g.strokeStyle = col;
-        g.lineWidth = 3;
-        g.lineCap = "round";
-        g.beginPath();
-        g.moveTo(ex - eyeW / 2, cy);
-        g.lineTo(ex + eyeW / 2, cy);
-        g.stroke();
-        continue;
-      }
-
-      g.fillStyle = col;
-      roundRect(g, ex - eyeW / 2, cy - eh / 2, eyeW, eh, Math.min(eyeW, eh) * 0.42);
-      g.fill();
-
-      // the highlight that makes two rectangles look wet
-      if (o > 0.55) {
-        g.fillStyle = "rgba(255,255,255,.82)";
-        roundRect(g, ex - eyeW / 2 + 8, cy - eh / 2 + 7, 12, Math.min(12, eh * 0.3), 5);
-        g.fill();
-      }
-
-      if (brow) {
-        g.strokeStyle = col;
-        g.lineWidth = 5;
-        g.lineCap = "round";
-        var tilt = i ? -4 : 4;
-        g.beginPath();
-        g.moveTo(ex - 18, cy - eh / 2 - 13 + tilt);
-        g.lineTo(ex + 18, cy - eh / 2 - 13 - tilt);
-        g.stroke();
-      }
-    }
-
-    if (opt.line1) {
-      g.fillStyle = "rgba(255,255,255,.86)";
-      g.font = "600 15px " + MONO;
-      g.textAlign = "center";
-      g.globalAlpha = opt.a1 == null ? 1 : opt.a1;
-      g.fillText(opt.line1, w / 2, h - 32);
-      g.globalAlpha = 1;
-    }
-    if (opt.line2) {
-      g.fillStyle = "rgba(255,255,255,.42)";
-      g.font = "400 12px " + MONO;
-      g.textAlign = "center";
-      g.globalAlpha = opt.a2 == null ? 1 : opt.a2;
-      g.fillText(opt.line2, w / 2, h - 14);
-      g.globalAlpha = 1;
-    }
-
-    g.restore();
-  }
-
-  var MONO = '"IBM Plex Mono", ui-monospace, monospace';
-
-  function roundRect(g, x, y, w, h, r) {
+  function rr(x, y, w, h, r) {
     r = Math.min(r, w / 2, h / 2);
     g.beginPath();
     g.moveTo(x + r, y);
@@ -608,250 +132,68 @@ npx github:sammarcus/codex-companion doctor</code></pre>
     g.arcTo(x, y + h, x, y, r);
     g.arcTo(x, y, x + w, y, r);
     g.closePath();
-  }
-
-  // Organic blink: fast close, slower open, randomised gap, occasional double.
-  function blinker(rate) {
-    var next = 900 + Math.random() * 2600, phase = 0, dbl = Math.random() < 0.24;
-    rate = rate || 1;
-    return function (dt) {
-      phase += dt * rate;
-      var u = phase - next;
-      if (u < 0) return 1;
-      if (u < 70) return 1 - u / 70;
-      if (u < 104) return 0;
-      if (u < 254) return (u - 104) / 150;
-      if (dbl) {
-        if (u < 390) return 1;
-        if (u < 460) return 1 - (u - 390) / 70;
-        if (u < 610) return (u - 460) / 150;
-      }
-      phase = 0; next = 900 + Math.random() * 2600; dbl = Math.random() < 0.24;
-      return 1;
-    };
-  }
-
-  function lerp(a, b, u) { return a + (b - a) * u; }
-  function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
-
-  function mixHex(a, b, u) {
-    function p(x) { return [parseInt(x.slice(1, 3), 16), parseInt(x.slice(3, 5), 16), parseInt(x.slice(5, 7), 16)]; }
-    var A = p(a), B = p(b);
-    return "rgb(" + Math.round(lerp(A[0], B[0], u)) + "," +
-                    Math.round(lerp(A[1], B[1], u)) + "," +
-                    Math.round(lerp(A[2], B[2], u)) + ")";
-  }
-
-  /* ---------- hero: the real first run sequence ---------- */
-
-  var hero = document.getElementById("hero");
-  var hg = hero.getContext("2d");
-  var heroBlink = blinker();
-  var seqStart = performance.now();
-  var NAME = "hello";
-
-  function drawHero(now, dt) {
-    var W = hero.width, H = hero.height;
-    hg.fillStyle = "#05070a";
-    hg.fillRect(0, 0, W, H);
-
-    var e = now - seqStart;          // milliseconds into the sequence
-    var lit = 1, open, col, gaze = 0, a1 = 0, a2 = 0;
-    var l1 = null, l2 = null;
-
-    if (e < 1400) {
-      // a light comes on, over two shut eyes
-      lit = Math.pow(clamp01(e / 1400), 2);
-      open = 0.02;
-      col = COL.sleep;
-    } else if (e < 1700) {
-      open = lerp(0.02, 0.35, (e - 1400) / 300);
-      col = mixHex(COL.sleep, COL.idle, (e - 1400) / 300);
-    } else if (e < 1950) {
-      open = 0.35;                   // the squint hold, the whole trick
-      col = COL.idle;
-    } else if (e < 2300) {
-      var u = (e - 1950) / 350;
-      open = lerp(0.35, 1, 1 - Math.pow(1 - u, 2));
-      col = COL.idle;
-    } else {
-      open = heroBlink(dt);
-      col = COL.idle;
-    }
-
-    if (e >= 2300 && e < 2700) gaze = -7 * clamp01((e - 2300) / 400);
-    else if (e >= 2700 && e < 2950) {
-      var v = (e - 2700) / 250;
-      gaze = -7 * (1 - (1 - Math.pow(1 - v, 2)));   // snaps to centre
-    }
-
-    if (e >= 5450) { l1 = "Sam"; a1 = clamp01((e - 5450) / 500); }
-    if (e < 8000) {
-      l2 = NAME;
-      a2 = clamp01((e - 5650) / 500) * (1 - clamp01((e - 7650) / 350));
-    } else {
-      l2 = "codex companion";
-      a2 = clamp01((e - 8000) / 350);
-    }
-
-    var nod = (e >= 5450 && e < 5800) ? -3 * Math.sin(((e - 5450) / 350) * Math.PI) : 0;
-
-    hg.save();
-    hg.globalAlpha = lit;
-    hg.translate(gaze * (W / 320), nod * (W / 320));
-    drawFace(hg, W, H, now, "idle", open, col, { line1: l1, a1: a1, line2: l2, a2: a2 });
-    hg.restore();
-
-    // The hand does not ride the gaze or the nod: it rises into the text band,
-    // which is composition and not part of the face.
-    hg.save();
-    hg.globalAlpha = lit;
-    drawGreeting(hg, W, e, col);
-    hg.restore();
-  }
-
-  // The greeting beat, following the firmware: a hand rises into the empty text
-  // band beside "Hi OpenAI", sweeps three times and drops. 1600ms end to end,
-  // 300ms up and 300ms down, and the sweep runs only in the middle so the hand
-  // starts and ends at exactly upright instead of snapping back.
-  var GR_T = 3650, GR_MS = 1600, GR_IN = 300, GR_OUT = 300;
-  var GR_TXT = "Hi OpenAI", GR_Y = 138, GR_RISE = 46, GR_GAP = 9, GR_HAND_W = 20;
-
-  function drawGreeting(g, W, e, col) {
-    var u = e - GR_T;
-    if (u < 0 || u >= GR_MS) return;
-
-    var lift = 1, alpha = 1, k;
-    if (u < GR_IN) {
-      k = u / GR_IN;
-      lift = Math.sin(k * Math.PI / 2);   // arrives softly
-      alpha = k;
-    } else if (u >= GR_MS - GR_OUT) {
-      k = (u - (GR_MS - GR_OUT)) / GR_OUT;
-      lift = 1 - k * k;                   // lowered, not switched off
-      alpha = 1 - k;
-    }
-    if (alpha <= 0) return;
-
-    var deg = 0;
-    if (u >= GR_IN && u < GR_MS - GR_OUT) {
-      var m = (u - GR_IN) / (GR_MS - GR_OUT - GR_IN);
-      deg = 23 * Math.sin(m * 3 * 2 * Math.PI);
-    }
-
-    var s = W / 320;
-    g.save();
-    g.scale(s, s);
-    g.globalAlpha *= alpha;
-
-    g.font = "600 15px " + MONO;
-    g.textAlign = "left";
-    g.textBaseline = "middle";
-    var tw = g.measureText(GR_TXT).width;
-    var left = 160 - (tw + GR_GAP + GR_HAND_W) / 2;
-
-    g.fillStyle = "rgba(255,255,255,.86)";
-    g.fillText(GR_TXT, left, GR_Y);
-
-    // Painted in the face's own colour: it is the creature's hand coming up
-    // from off the panel, not a piece of chrome.
-    g.translate(left + tw + GR_GAP + GR_HAND_W / 2, GR_Y + (1 - lift) * GR_RISE);
-    g.rotate(deg * Math.PI / 180);
-    g.fillStyle = col;
-    roundRect(g, -8, -11, 16, 20, 6);
     g.fill();
-    for (var f = 0; f < 3; f++) {
-      roundRect(g, -7.5 + f * 5, -16, 4, 8, 2);
-      g.fill();
-    }
-    roundRect(g, 6, -6, 5, 9, 2.5);
-    g.fill();
-
-    g.restore();
   }
 
-  document.getElementById("replay").addEventListener("click", function () {
-    seqStart = performance.now();
-    heroBlink = blinker();
-  });
-
-  /* ---------- the five states ---------- */
-
-  var STATES = [
-    ["idle",    "Nothing is happening. It blinks, glances around, and is content to be ignored."],
-    ["busy",    "Your agent is working. Lids down to a concentrating squint, gaze tracking back and forth, blinking less."],
-    ["waiting", "It needs a decision from you. Eyes wide, brows up, head hopping on every pulse. After ten seconds it escalates and turns red."],
-    ["done",    "The turn finished. A happy squint and one hop, then back to idle. A repeated line will not replay it."],
-    ["sleep",   "Nothing has spoken for a while. Shut, with the lid line breathing on a four second sine."]
-  ];
-
-  var stateEls = [];
-  var host = document.getElementById("states");
-  STATES.forEach(function (s) {
-    var row = document.createElement("div");
-    row.className = "state";
-    row.innerHTML =
-      '<canvas width="384" height="204" role="img" aria-label="' + s[0] + ' expression"></canvas>' +
-      '<div class="sname"><span class="sdot" style="background:' + COL[s[0]] + '"></span>' + s[0] + '</div>' +
-      '<div class="sdesc">' + s[1] + '</div>';
-    host.appendChild(row);
-    var c = row.querySelector("canvas");
-    stateEls.push({ state: s[0], g: c.getContext("2d"), c: c, blink: blinker(s[0] === "waiting" ? 2 : 1) });
-  });
-
-  /* ---------- the timeline ---------- */
-
-  var BEATS = [
-    ["It is asleep", "Nothing on the panel. As far as you can tell it has not woken up yet.", 0],
-    ["The lights come up", "A glow arrives over two shut eyes. Something was sleeping and somebody just opened the door.", 0],
-    ["It cracks an eye", "Then holds there, squinting against the light, before opening the rest of the way. A real eye opens in two moves. One smooth fade reads as a camera shutter.", 0],
-    ["It looks around", "Awake, but it has not found anybody yet.", 0],
-    ["It finds you", "The gaze snaps to centre and stops. Slow enough to see, fast enough to read as being noticed rather than scanned.", 1],
-    ["It blinks", "Then a beat of nothing. It has seen you and has not said anything yet.", 0],
-    ["It waves", "A hand rises into the empty text band beside the words <code>Hi OpenAI</code>, sweeps three times and drops. The one thing this device ever says to the room instead of to its owner.", 0],
-    ["It says whose it is", "A small nod, your name fades in, and <code>hello</code> under it. You do not say whose desk you are on before you have said hello, so the greeting goes first.", 0],
-    ["It settles", "The greeting dissolves into the screen it will wear from now on. Nine seconds, and it has never done this before."]
-  ];
-
-  var tl = document.getElementById("timeline");
-  BEATS.forEach(function (b, i) {
-    var el = document.createElement("div");
-    el.className = "beat" + (b[2] ? " key" : "");
-    el.innerHTML = '<div class="t">' + String(i + 1).padStart(2, "0") + '</div>' +
-                   '<div><h3>' + b[0] + '</h3><p>' + b[1] + '</p></div>';
-    tl.appendChild(el);
-  });
-
-  /* ---------- loop ---------- */
+  // Blink: quick close, softer open, randomised gap, occasional double.
+  var next = 1200 + Math.random() * 2600, phase = 0, dbl = Math.random() < .24;
+  function blink(dt) {
+    phase += dt;
+    var u = phase - next;
+    if (u < 0) return 1;
+    if (u < 70) return 1 - u / 70;
+    if (u < 104) return 0;
+    if (u < 254) return (u - 104) / 150;
+    if (dbl) {
+      if (u < 390) return 1;
+      if (u < 460) return 1 - (u - 390) / 70;
+      if (u < 610) return (u - 460) / 150;
+    }
+    phase = 0; next = 1200 + Math.random() * 2600; dbl = Math.random() < .24;
+    return 1;
+  }
 
   var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var last = performance.now();
 
   function frame(now) {
-    var dt = Math.min(64, now - last);
-    last = now;
+    var dt = Math.min(64, now - last); last = now;
+    var open = reduced ? 1 : blink(dt);
 
-    drawHero(now, dt);
+    g.fillStyle = "#05070a";
+    g.fillRect(0, 0, W, H);
+    g.save();
+    g.scale(s, s);
 
-    stateEls.forEach(function (s) {
-      var g = s.g, W = s.c.width, H = s.c.height;
-      g.fillStyle = "#05070a";
-      g.fillRect(0, 0, W, H);
-      drawFace(g, W, H, now, s.state, s.blink(dt), COL[s.state], {});
+    var cx = 160 + (reduced ? 0 : Math.sin(now / 2600) * 7);
+    var cy = 78;
+    var breathe = 0.5 + 0.5 * Math.sin(now / 1200);
+    var eyeW = 46, eyeH = 60 * (1 + 0.05 * breathe) * Math.max(0.05, open);
+
+    g.fillStyle = "#4aa3ff";
+    [cx - 62, cx + 62].forEach(function (ex) {
+      if (eyeH < 5) {
+        g.fillRect(ex - eyeW / 2, cy - 1.5, eyeW, 3);
+        return;
+      }
+      rr(ex - eyeW / 2, cy - eyeH / 2, eyeW, eyeH, Math.min(eyeW, eyeH) * 0.42);
+      if (open > 0.55) {
+        g.fillStyle = "rgba(255,255,255,.82)";
+        rr(ex - eyeW / 2 + 8, cy - eyeH / 2 + 7, 12, Math.min(12, eyeH * 0.3), 5);
+        g.fillStyle = "#4aa3ff";
+      }
     });
 
+    g.fillStyle = "rgba(255,255,255,.34)";
+    g.font = '400 12px "IBM Plex Mono", monospace';
+    g.textAlign = "center";
+    g.fillText("codex companion", 160, 152);
+
+    g.restore();
     if (!reduced) requestAnimationFrame(frame);
   }
-
   requestAnimationFrame(frame);
-
-  if (reduced) {
-    // Still render one honest frame of each.
-    seqStart = performance.now() - 5200;
-    frame(performance.now());
-  }
 })();
 </script>
-
 </body>
 </html>
