@@ -99,6 +99,22 @@ not one of the nineteen above is ignored rather than treated as malformed, which
 is inherent to how `ArduinoJson`'s `doc["field"]` lookups work: a key the
 parser never asks for is simply never read.
 
+Nineteen is checkable: `grep -c 'doc\["' firmware/src/main.cpp` returns 19,
+one lookup per field. They fall into two groups, and the split is the whole
+privacy argument in one line:
+
+- **Eight are emitted by the shipped helper's hook path**, and only these
+  eight: `state`, `ring`, `center`, `label`, `sub`, `tps`, `time` and
+  `tokens`. Numbers, timestamps and one of five fixed state words. A running
+  Codex session can never reach any of the other eleven.
+- **Eleven are driven by a person**, by hand or through one of the helper's
+  direct-to-board subcommands: `name` and `face` (persisted to NVS), `say` and
+  `saysecs` (the message card), `dnd` (the sign), `play` (the toy), `stats`,
+  `focus` and `focusmins` (the timer), `reset` and `firstrun`.
+
+Each of the eleven repeats that fact in its own section below, because a field
+table is read one row at a time.
+
 ### 2.2 Example line
 
 ```json
@@ -932,6 +948,20 @@ Sent once, after the 2000ms boot hold (`BOOT_HOLD_MS`; the hold loop and the
 - It exists so a host can read back what a `"name"` line did without a second
   command, and so persistence across a power cycle is provable over the wire
   rather than by eye.
+
+Captured on a board on `/dev/cu.usbmodem1101`, reading the greeting before and
+after setting a name, with a hardware reset (DTR and RTS pulsed) in between:
+
+```
+hello tdisplay-s3 v1 name=""
+                                     <- {"name":"Alex Rivera"} then reset
+hello tdisplay-s3 v1 name="Alex Rivera"
+                                     <- {"name":""} then reset
+hello tdisplay-s3 v1 name=""
+```
+
+The name survived a power cycle and then cleared cleanly, which is exactly what
+it has to do for a fleet whose recipients are not known at flash time.
 
 ### 3.2 `ok`
 
