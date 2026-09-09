@@ -3024,6 +3024,23 @@ async function cmdRun(opts) {
   say(link ? `writing to ${link.path}` : 'dry run: not opening any port');
   say('Ctrl-C to stop. Nothing was installed.');
 
+  // Say hello on the panel straight away. Without this the first thing a new
+  // owner sees is nothing at all: the device only reacts to Codex activity, so
+  // starting the program outside a turn looks exactly like starting a program
+  // that does not work. One visible frame proves the cable, the port and the
+  // program in the half second before they lose interest.
+  if (link) {
+    try {
+      link.writeLine(JSON.stringify({
+        state: 'done',
+        say: 'connected',
+        saysecs: 3,
+      }));
+    } catch {
+      // A failed hello is not a reason to refuse to run.
+    }
+  }
+
   const stop = installStopHandler();
   let lastLine = null;
   let lastSentAt = 0;
