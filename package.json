@@ -1,0 +1,24 @@
+{
+  "name": "codex-companion",
+  "version": "2.0.0",
+  "description": "Desk companion for the OpenAI Codex CLI: one dependency-free file that lights a LILYGO T-Display-S3 from Codex's own hook events.",
+  "keywords": ["codex", "esp32-s3", "t-display-s3", "serial", "status", "desk-toy"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sammarcus/codex-companion.git"
+  },
+  "type": "commonjs",
+  "main": "helper/codex-companion.js",
+  "bin": {
+    "codex-companion": "helper/codex-companion.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "cd helper && node --test \"test/**/*.test.js\"",
+    "start": "node helper/codex-companion.js run"
+  },
+  "files": ["helper/codex-companion.js", "README.md", "LICENSE"]
+}

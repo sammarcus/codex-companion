@@ -82,7 +82,7 @@ without touching the buttons.
 
 Optional: your live Codex session
 
-One file, at [URL]. Run it and the screen starts showing
+One file, at github.com/sammarcus/codex-companion. Run it and the screen starts showing
 what your session is doing: a ring for how full your
 context window is, and an amber pulse that means your
 agent is waiting on you. That one is worth having.
@@ -96,7 +96,7 @@ anything, never opens a network connection, and never
 reads your prompts, your code or your output.
 
 
-Anything at all: [CONTACT]
+Anything at all: sam.marcus@me.com
 ```
 
 ---
@@ -180,18 +180,18 @@ reasonably wonder what a gift plugged into a work laptop is doing. Every one is
 checkable in a grep, and `docs/verification.md` prints the greps, meant to be run
 by whoever has to approve this on a work machine.
 
-**`[URL]`** is the one real blocker (`docs/open-questions.md`, N1). It has to be
+**`github.com/sammarcus/codex-companion`** is the one real blocker (`docs/open-questions.md`, N1). It has to be
 a place a coworker can fetch a single `.js` file from. `site/index.html` exists
 in the tree and is not hosted anywhere. Do not print a URL that does not
 resolve. Keep it short: measured with `docs/make-qr.sh`, a 38 character URL
 renders as a 31mm QR and an 88 character one as a 42mm QR, and only one of those
 fits comfortably on a card.
 
-**`[CONTACT]`** is whatever address goes on fourteen physical cards.
+**`sam.marcus@me.com`** is whatever address goes on fourteen physical cards.
 
 **The QR**, if you print one, comes from `docs/make-qr.sh`, which writes
 `docs/out/card-qr.png` (opaque white, 300 dpi) and `docs/out/card-qr.svg`. It
-encodes the same string as `[URL]` and **refuses to render while that is unset**,
+encodes the same string as `github.com/sammarcus/codex-companion` and **refuses to render while that is unset**,
 on purpose: a QR that resolves to nothing is the one error nobody can spot on a
 printed card. It decodes its own output back and tells you whether it matched.
 Needs `qrencode`. The QR is the first thing to cut on flash day.
