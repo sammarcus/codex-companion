@@ -1,1587 +1,755 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Codex Desk Companion</title>
-<meta name="description" content="A small screen for your desk that shows what your Codex session is doing, from across the room. It works on USB power alone. The host program is optional.">
-<meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#0b0d10">
-
-<!--
-  TWO THINGS TO FILL IN BEFORE THIS PAGE GOES ANYWHERE.
-
-  HELPER_URL is the same string as [URL] on the back of docs/card.md and
-  CARD_URL in docs/make-qr.sh: the one place a recipient can fetch the single
-  optional helper file from. REPO_URL is where the source lives, and may be
-  the same host.
-
-  While either is still REPLACE-ME, every link to it on this page renders as
-  a visible "not set yet" note rather than a dead link, on purpose, and for
-  the same reason docs/make-qr.sh refuses to render a QR code while CARD_URL
-  is a placeholder: a link that resolves to nothing is worse than no link,
-  and it is the one error you cannot spot on a printed card.
--->
-<script>
-  var REPO_URL = 'REPLACE-ME';
-  var HELPER_URL = 'REPLACE-ME';
-</script>
-
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
   :root {
-    --bg:      #0b0d10;
-    --panel:   #0f1216;
-    --raised:  #14181d;
-    --line:    #1e242c;
-    --line-2:  #2a323c;
-    --ink:     #e9ecf1;
-    --ink-2:   #aab3c0;
-    --dim:     #79828f;
+    --panel:      #05070a;
+    --ground:     #f2f3f5;
+    --surface:    #ffffff;
+    --edge:       #d8dbe0;
+    --ink:        #14181e;
+    --ink-soft:   #5a626e;
+    --ink-faint:  #8b929c;
+    --idle:       #4aa3ff;
+    --waiting:    #ffb020;
+    --done:       #39d98a;
+    --asleep:     #4a5768;
+    --accent:     #2f7fd4;
 
-    --idle:    #3aa0ff;
-    --busy:    #ffb020;
-    --wait:    #ffc53d;
-    --hot:     #ff3b30;
-    --done:    #34c759;
-    --teal:    #2ed3c6;
-    --violet:  #a56bff;
-    --sleep:   #4a5a7d;
+    --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
-    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --measure: 66ch;
+    --rule: 1px solid var(--edge);
+  }
 
-    --pad: clamp(20px, 5vw, 40px);
-    --measure: 34rem;
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:    #0a0d12;
+      --surface:   #12161d;
+      --edge:      #222932;
+      --ink:       #e7eaef;
+      --ink-soft:  #a0a8b4;
+      --ink-faint: #6b7481;
+      --accent:    #6fb4ff;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:    #0a0d12;
+    --surface:   #12161d;
+    --edge:      #222932;
+    --ink:       #e7eaef;
+    --ink-soft:  #a0a8b4;
+    --ink-faint: #6b7481;
+    --accent:    #6fb4ff;
   }
 
   * { box-sizing: border-box; }
 
-  html { -webkit-text-size-adjust: 100%; }
-
   body {
     margin: 0;
-    background: var(--bg);
+    background: var(--ground);
     color: var(--ink);
-    font: 400 16px/1.62 var(--sans);
-    letter-spacing: 0.004em;
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.62;
     -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-    overflow-x: hidden;
   }
 
-  .wrap { max-width: 46rem; margin: 0 auto; padding: 0 var(--pad); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 100px; }
+  .col  { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+
+  header.mast {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 34px 0 28px;
+    border-bottom: var(--rule);
+    margin-bottom: 44px;
+  }
+  .mark {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+  .mast .meta {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: .04em;
+    margin-left: auto;
+  }
 
   /* ---------- type ---------- */
 
-  h1, h2, h3 { font-weight: 620; letter-spacing: -0.018em; line-height: 1.18; margin: 0; }
-  h1 { font-size: clamp(30px, 7.4vw, 46px); }
-  h2 { font-size: clamp(21px, 4.2vw, 26px); margin-bottom: 14px; }
-  h3 { font-size: 16px; letter-spacing: 0.005em; margin-bottom: 6px; }
-
-  p { margin: 0 0 15px; max-width: var(--measure); }
-  p.lede { font-size: clamp(17px, 3.4vw, 20px); line-height: 1.5; color: var(--ink-2); }
-  p:last-child { margin-bottom: 0; }
-
-  .eyebrow {
-    font: 600 11px/1 var(--sans);
-    letter-spacing: 0.16em;
+  h1 {
+    font-size: clamp(34px, 5.2vw, 54px);
+    line-height: 1.06;
+    letter-spacing: -.026em;
+    font-weight: 700;
+    margin: 0 0 18px;
+    text-wrap: balance;
+  }
+  h2 {
+    font-size: 15px;
+    font-family: var(--mono);
+    font-weight: 600;
+    letter-spacing: .13em;
     text-transform: uppercase;
-    color: var(--dim);
-    margin: 0 0 12px;
+    color: var(--ink-soft);
+    margin: 0 0 22px;
+    padding-bottom: 10px;
+    border-bottom: var(--rule);
+  }
+  h3 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -.01em;
+    margin: 0 0 8px;
+  }
+  p { margin: 0 0 18px; }
+  .lede { font-size: 19px; line-height: 1.58; color: var(--ink-soft); }
+  strong { font-weight: 600; color: var(--ink); }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
   }
 
-  a { color: var(--idle); text-decoration: none; border-bottom: 1px solid rgba(58,160,255,.32); }
-  a:hover { border-bottom-color: var(--idle); }
-
-  strong { font-weight: 620; color: #fff; }
-  em { font-style: normal; color: var(--ink); }
+  section { margin-bottom: 68px; }
 
   code {
-    font: 400 0.86em/1.5 var(--mono);
-    background: #14181d;
-    border: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: .88em;
+    background: var(--surface);
+    border: var(--rule);
     border-radius: 4px;
     padding: 1px 5px;
-    color: #cfd8e3;
   }
-
-  /* ---------- structure ---------- */
-
-  header.hero { padding: clamp(48px, 12vw, 96px) 0 0; }
-  header.hero h1 { margin-bottom: 16px; }
-  .mark {
-    display: inline-flex; align-items: center; gap: 9px;
-    font: 600 11px/1 var(--sans); letter-spacing: .16em; text-transform: uppercase;
-    color: var(--dim); margin-bottom: 22px;
+  pre {
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.7;
+    background: var(--surface);
+    border: var(--rule);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 0 0 18px;
   }
-  .mark i {
-    width: 7px; height: 7px; border-radius: 50%; background: var(--idle);
-    box-shadow: 0 0 10px rgba(58,160,255,.7); display: block;
-    animation: breathe 2.4s ease-in-out infinite;
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  pre .c { color: var(--ink-faint); }
+
+  /* ---------- the device ---------- */
+
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 380px);
+    gap: 44px;
+    align-items: center;
+    margin-bottom: 68px;
   }
-  @keyframes breathe { 0%,100% { opacity: .45 } 50% { opacity: 1 } }
-  @media (prefers-reduced-motion: reduce) { .mark i { animation: none; opacity: .9 } }
-
-  section { padding: clamp(44px, 9vw, 78px) 0 0; }
-  section.close { padding-top: clamp(30px, 6vw, 48px); }
-  .rule { height: 1px; background: var(--line); margin-top: clamp(44px, 9vw, 78px); }
-
-  footer { padding: clamp(40px, 8vw, 64px) 0 clamp(56px, 12vw, 96px); color: var(--dim); font-size: 14px; }
-  footer p { max-width: var(--measure); }
-
-  /* ---------- the panel demo ---------- */
-
-  .demo { margin: clamp(28px, 6vw, 40px) 0 0; }
+  @media (max-width: 860px) {
+    .stage { grid-template-columns: 1fr; gap: 30px; }
+  }
 
   .bezel {
-    background: linear-gradient(#191d23, #101317);
-    border: 1px solid var(--line-2);
+    background: #14171c;
     border-radius: 16px;
-    padding: 11px;
-    box-shadow: 0 20px 50px -28px #000, inset 0 1px 0 rgba(255,255,255,.045);
-    max-width: 460px;
-  }
-  .screen {
-    display: block; width: 100%; height: auto; aspect-ratio: 320 / 170;
-    background: #000; border-radius: 6px;
-  }
-  .bezel .feet {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 9px 3px 1px; font: 500 10px/1 var(--sans);
-    letter-spacing: .13em; text-transform: uppercase; color: #4d5762;
-  }
-  .bezel .feet span { display: flex; align-items: center; gap: 6px; }
-  .bezel .feet b { width: 9px; height: 4px; border-radius: 2px; background: #2b333d; display: block; }
-
-  .controls { margin-top: 18px; display: flex; flex-direction: column; gap: 12px; max-width: 460px; }
-  .group { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
-  .group > .glabel {
-    font: 600 10px/1 var(--sans); letter-spacing: .15em; text-transform: uppercase;
-    color: var(--dim); width: 100%; margin-bottom: 1px;
-  }
-
-  button.chip {
-    appearance: none;
-    background: var(--raised);
-    color: var(--ink-2);
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    padding: 9px 15px;
-    min-height: 38px;
-    font: 500 13px/1 var(--sans);
-    letter-spacing: .01em;
-    cursor: pointer;
-    transition: color .14s, border-color .14s, background .14s;
-  }
-  button.chip:hover { color: var(--ink); border-color: var(--line-2); }
-  button.chip[aria-pressed="true"] {
-    color: #080b0e;
-    background: var(--chip, var(--idle));
-    border-color: var(--chip, var(--idle));
-    font-weight: 620;
-  }
-  button.chip:focus-visible { outline: 2px solid var(--idle); outline-offset: 2px; }
-
-  .nameline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .nameline input {
-    appearance: none;
-    background: var(--raised);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    color: var(--ink);
-    font: 400 14px/1 var(--sans);
-    padding: 11px 13px;
-    min-height: 40px;
-    flex: 1 1 190px;
-    min-width: 0;
-  }
-  .nameline input:focus { outline: none; border-color: var(--line-2); }
-  .nameline input::placeholder { color: #5d6774; }
-
-  .caption { font-size: 13.5px; color: var(--dim); margin-top: 14px; max-width: var(--measure); }
-
-  /* ---------- state list ---------- */
-
-  .states { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
-  .states li {
-    display: grid;
-    grid-template-columns: 12px 5.4rem 1fr;
-    gap: 14px;
-    align-items: baseline;
-    padding: 15px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .states .dot { width: 10px; height: 10px; border-radius: 50%; align-self: center; }
-  .states .nm { font-family: var(--mono); font-size: 13.5px; color: var(--ink); letter-spacing: .01em; }
-  .states .ds { color: var(--ink-2); font-size: 15px; line-height: 1.5; }
-  .states .ds b { color: var(--ink); font-weight: 560; }
-  @media (max-width: 460px) {
-    .states li { grid-template-columns: 10px 1fr; gap: 10px 12px; }
-    .states .nm { grid-column: 2; }
-    .states .ds { grid-column: 2; margin-top: 2px; }
-  }
-
-  /* ---------- do / never ---------- */
-
-  .cols { display: grid; gap: 18px; grid-template-columns: 1fr 1fr; margin-top: 6px; }
-  @media (max-width: 620px) { .cols { grid-template-columns: 1fr; } }
-
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 20px;
-  }
-  .card h3 { margin-bottom: 10px; }
-  .card ul { margin: 0; padding: 0; list-style: none; }
-  .card li {
-    position: relative; padding-left: 20px; margin-bottom: 9px;
-    color: var(--ink-2); font-size: 14.6px; line-height: 1.5;
-  }
-  .card li:last-child { margin-bottom: 0; }
-  .card li::before {
-    position: absolute; left: 0; top: -1px; font: 600 14px/1.6 var(--sans);
-  }
-  .card.yes li::before { content: "+"; color: var(--done); }
-  .card.no li::before { content: "\00d7"; color: var(--hot); }
-  .card li b { color: var(--ink); font-weight: 560; }
-
-  /* ---------- code blocks ---------- */
-
-  .code {
+    padding: 22px 18px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 18px 44px rgba(0,0,0,.34);
     position: relative;
-    background: #0d1014;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    margin: 0 0 16px;
   }
-  .code pre {
-    margin: 0; padding: 16px 46px 16px 16px;
-    overflow-x: auto;
-    font: 400 13px/1.75 var(--mono);
-    color: #cfd8e3;
-    -webkit-overflow-scrolling: touch;
+  .bezel canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 320 / 170;
+    background: var(--panel);
+    border-radius: 4px;
   }
-  .code pre.wrap { white-space: pre-wrap; word-break: break-word; }
-  .code pre .c { color: #5f6b7a; }
-  .code button.copy {
-    position: absolute; top: 8px; right: 8px;
-    appearance: none; background: #171c22; border: 1px solid var(--line);
-    color: var(--dim); border-radius: 6px; cursor: pointer;
-    font: 500 11px/1 var(--sans); padding: 7px 8px; min-height: 28px;
+  .bezel .usb {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: -7px;
+    width: 44px;
+    height: 8px;
+    border-radius: 0 0 4px 4px;
+    background: #2a2f37;
   }
-  .code button.copy:hover { color: var(--ink); border-color: var(--line-2); }
-  .code button.copy:focus-visible { outline: 2px solid var(--idle); outline-offset: 2px; }
 
-  /* ---------- button table ---------- */
-
-  .btns { width: 100%; border-collapse: collapse; font-size: 14.6px; }
-  .btns th, .btns td { text-align: left; padding: 12px 12px 12px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
-  .btns th { font: 600 10.5px/1.5 var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
-  .btns td:first-child { color: var(--ink); white-space: nowrap; font-family: var(--mono); font-size: 13px; padding-right: 18px; }
-  .btns td { color: var(--ink-2); }
-  .scroller { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-
-  /* ---------- misc ---------- */
-
-  .qa { border-top: 1px solid var(--line); }
-  .qa > div { padding: 16px 0; border-bottom: 1px solid var(--line); }
-  .qa h3 { color: var(--ink); margin-bottom: 4px; }
-  .qa p { color: var(--ink-2); font-size: 15px; margin: 0; }
-
-  .missing {
-    display: inline-block;
-    font: 500 12.5px/1 var(--sans);
-    color: var(--dim);
-    background: #14181d;
-    border: 1px dashed var(--line-2);
+  .controls {
+    display: flex;
+    gap: 7px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+  }
+  button {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    background: var(--surface);
+    border: var(--rule);
     border-radius: 6px;
-    padding: 6px 9px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: color .12s, border-color .12s;
+  }
+  button:hover { color: var(--ink); border-color: var(--ink-faint); }
+  button[aria-pressed="true"] {
+    color: var(--panel);
+    background: var(--sel, var(--idle));
+    border-color: transparent;
+    font-weight: 600;
+  }
+  :root[data-theme="dark"] button[aria-pressed="true"],
+  :root:not([data-theme="light"]) button[aria-pressed="true"] { color: #05070a; }
+
+  /* ---------- states ---------- */
+
+  .states { display: grid; gap: 0; border-top: var(--rule); }
+  .state {
+    display: grid;
+    grid-template-columns: 128px 92px minmax(0, 1fr);
+    gap: 22px;
+    align-items: center;
+    padding: 18px 0;
+    border-bottom: var(--rule);
+  }
+  @media (max-width: 700px) {
+    .state { grid-template-columns: 104px minmax(0, 1fr); }
+    .state .sname { grid-column: 2; }
+    .state .sdesc { grid-column: 1 / -1; }
+  }
+  .state canvas {
+    width: 128px;
+    aspect-ratio: 320 / 170;
+    height: auto;
+    background: var(--panel);
+    border-radius: 3px;
+    display: block;
+  }
+  @media (max-width: 700px) { .state canvas { width: 104px; } }
+  .sname {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .05em;
+  }
+  .sdot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    margin-right: 7px;
+    vertical-align: 1px;
+  }
+  .sdesc { color: var(--ink-soft); font-size: 15px; }
+
+  /* ---------- the timeline ---------- */
+
+  .tl {
+    border-top: var(--rule);
+    font-variant-numeric: tabular-nums;
+  }
+  .beat {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 24px;
+    padding: 15px 0;
+    border-bottom: var(--rule);
+    align-items: start;
+  }
+  .beat .t {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--ink-faint);
+    padding-top: 2px;
+  }
+  .beat .t b { color: var(--ink); font-weight: 600; }
+  .beat h3 { font-size: 16px; margin-bottom: 4px; }
+  .beat p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+  .beat.key { background: linear-gradient(90deg, color-mix(in srgb, var(--idle) 9%, transparent), transparent 62%); }
+  .beat.key h3::after {
+    content: "the beat it exists for";
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--idle);
+    margin-left: 10px;
+    vertical-align: 2px;
   }
 
-  .skip {
-    position: absolute; left: -9999px;
+  /* ---------- claims ---------- */
+
+  .claims { display: grid; gap: 1px; background: var(--edge); border: var(--rule); border-radius: 10px; overflow: hidden; }
+  .claim { background: var(--ground); padding: 20px 22px; }
+  .claim h3 { font-size: 15px; margin-bottom: 5px; }
+  .claim p { margin: 0; font-size: 14.5px; color: var(--ink-soft); }
+  .claim .how { font-family: var(--mono); font-size: 12.5px; margin-top: 9px; color: var(--ink-faint); }
+
+  .note {
+    border-left: 2px solid var(--waiting);
+    padding: 2px 0 2px 18px;
+    color: var(--ink-soft);
+    font-size: 15px;
   }
-  .skip:focus {
-    position: static; display: inline-block; margin: 12px; padding: 8px 12px;
-    background: var(--raised); border-radius: 6px; border: 1px solid var(--line-2);
+
+  footer {
+    border-top: var(--rule);
+    padding-top: 22px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-faint);
+    letter-spacing: .03em;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
   }
 </style>
-</head>
-<body>
 
-<a class="skip" href="#what">Skip to the text</a>
+<div class="wrap">
 
-<header class="hero">
-  <div class="wrap">
-    <div class="mark"><i></i> Codex Desk Companion</div>
-    <h1>A small creature that lives on your desk.</h1>
-    <p class="lede">Plug it into anything that supplies 5V and it wakes up, blinks, looks around and
-      settles in. That much needs no software at all. Add the optional program and it starts reporting:
-      green means the turn finished, amber means it is waiting on you, and you can read that from across
-      the room without switching windows.</p>
-
-    <div class="demo">
-      <div class="bezel">
-        <canvas id="screen" class="screen" width="320" height="170"
-                aria-label="A live simulation of the companion's screen"></canvas>
-        <div class="feet">
-          <span><b></b> BOOT</span>
-          <span>T-DISPLAY-S3</span>
-          <span>KEY <b></b></span>
-        </div>
-      </div>
-
-      <div class="controls">
-        <div class="group" id="stateGroup" role="group" aria-label="Screen state">
-          <span class="glabel">What the session is doing</span>
-        </div>
-        <div class="group" id="faceGroup" role="group" aria-label="Face">
-          <span class="glabel">Face</span>
-        </div>
-        <div class="group nameline">
-          <span class="glabel">Owner name</span>
-          <input id="nameInput" type="text" maxlength="24" spellcheck="false" autocomplete="off"
-                 placeholder="type a name, up to 24 letters" aria-label="Owner name shown on the screen">
-        </div>
-      </div>
-
-      <p class="caption">That is the real thing, drawn from the same geometry, the same palette and the
-        same timings as the firmware. <em>Ambient</em> is what the unit does with no software anywhere.
-        Leave it on <em>waiting</em> for ten seconds and watch it escalate. <em>Done</em> is a single
-        flash and then it settles, so tap it again to see it twice.</p>
-    </div>
-  </div>
+<header class="mast">
+  <span class="mark">Codex Desk Companion</span>
+  <span class="meta">LILYGO T-Display-S3 &middot; 320&times;170 &middot; USB</span>
 </header>
 
-<div class="wrap"><div class="rule"></div></div>
+<div class="stage">
+  <div class="col">
+    <h1>A small thing on your desk that knows when your agent needs you.</h1>
+    <p class="lede">It watches your Codex session and shows it as a face. Mostly it sits there
+    calmly. When your agent is waiting on a decision, you know from across the room.</p>
+    <p>Plug it into any USB port or charger and it works. There is no app, no account,
+    no pairing, and no network of any kind. The software further down this page is a bonus
+    you can ignore forever.</p>
+  </div>
 
-<section id="what">
-  <div class="wrap">
-    <p class="eyebrow">What is on your desk</p>
-    <h2>It already works.</h2>
-    <p>Plug it into any USB port, any charger, any battery. No app, no account, no WiFi, no pairing,
-      no setup. It lights up and stays lit, and that is the whole object. If you read nothing else on
-      this page, nothing is missing.</p>
-    <p>The hardware is a LILYGO T-Display-S3: an ESP32-S3 with a 320 by 170 colour LCD and two buttons.
-      There is no radio in use, no microphone and no camera. The only wire out of it is the USB cable
-      you plugged in.</p>
-    <p>With nothing talking to it, it runs <strong>ambient mode</strong> forever: a face that blinks,
-      glances around and drifts slowly through two blues and a teal, with your name under it. That is
-      the state most of these will spend most of their life in, and it is meant to be pleasant to sit
-      next to rather than something demanding your attention.</p>
+  <div>
+    <div class="bezel">
+      <!-- PHOTO: replace this canvas with a real photograph of the finished unit on a desk,
+           shot at a slight angle with the panel lit, once the fleet is assembled.
+           Suggested path: site/img/device-on-desk.jpg -->
+      <canvas id="hero" width="640" height="340" role="img"
+              aria-label="The device panel, showing an animated face waking up"></canvas>
+      <div class="usb"></div>
+    </div>
+    <div class="controls">
+      <button id="replay" type="button">Replay the first run</button>
+    </div>
+  </div>
+</div>
+
+<section>
+  <h2>The five states</h2>
+  <div class="col" style="margin-bottom:26px">
+    <p>The face is the whole interface. Each state has an expression, and the ring beneath it
+    carries the number when a host is connected. Nothing here needs reading, which is the point:
+    you catch it in peripheral vision while you are doing something else.</p>
+  </div>
+  <div class="states" id="states"></div>
+</section>
+
+<section>
+  <h2>The first time you plug it in</h2>
+  <div class="col" style="margin-bottom:26px">
+    <p>A brand new board plays this once, then never again. The flag that arms it lives in a
+    region of flash that reflashing does not touch, so every unit can be built, tested and
+    powered a dozen times and still owe its owner the whole thing.</p>
+    <p>It is a creature waking up, not a device starting. It takes about nine seconds, the only
+    words are your name and <code>hello</code>, and it needs no software to happen.</p>
+  </div>
+  <div class="tl" id="timeline"></div>
+</section>
+
+<section>
+  <h2>The optional program</h2>
+  <div class="col">
+    <p>If you want the device to follow your actual Codex session, there is one command. It
+    fetches a single file from the public repository and runs it. Nothing is installed, nothing
+    is left behind, and it is small enough to read in full first.</p>
+  </div>
+  <div class="claims" style="margin:26px 0">
+    <div class="claim">
+      <h3>It cannot approve anything</h3>
+      <p>It registers as a Codex hook so it learns when your agent is waiting. Hooks may return a
+      decision, and this one always declines to, twice over: it writes nothing to standard output,
+      and it registers asynchronously, either of which alone makes Codex discard a verdict. You
+      still approve in your own terminal.</p>
+      <p class="how">grep the file for the word decision</p>
+    </div>
+    <div class="claim">
+      <h3>It reads counters, not content</h3>
+      <p>Token counts, timestamps and state names. It never retains the text of your prompts, your
+      code, or the model's replies. A test in the suite walks everything it extracts and fails if
+      any value is a string.</p>
+      <p class="how">npm test, then read test/metrics.test.js</p>
+    </div>
+    <div class="claim">
+      <h3>It has no dependencies and no network</h3>
+      <p>One file, four imports, all from the Node standard library. Nothing is installed, nothing
+      persists, and there is no HTTP client anywhere in it. Closing the terminal ends it completely.</p>
+      <p class="how">grep for require of http, https, net, tls, dns, or fetch</p>
+    </div>
+  </div>
+  <div class="col">
+    <p>Run it in the foreground, watch it, and stop it with Ctrl-C:</p>
+  </div>
+  <pre><code>npx github:sammarcus/codex-companion
+
+<span class="c"># or look before you leap: what it can see, changing nothing</span>
+npx github:sammarcus/codex-companion doctor</code></pre>
+</section>
+
+<section>
+  <h2>Faces are swappable</h2>
+  <div class="col">
+    <p>The drawing sits behind an interface. A face receives how open the eyes should be, where the
+    gaze is pointed, the state and a colour, and draws. It never decides when to blink, and it
+    never touches the state machine, the transitions or the layout.</p>
+    <p>Three ship. Hold the second button for about a second to cycle them, or send one over the
+    wire. The choice persists, so changing the look needs no reflash.</p>
+  </div>
+  <pre><code>printf '{"face":"bear"}\n' &gt; /dev/cu.usbmodem&lt;N&gt;</code></pre>
+  <div class="col">
+    <p class="note">One trap, learned on hardware and worth knowing before you write your own: a
+    half-width that computes to a non-numeric value passes every minimum check and then hands the
+    graphics library a radius it never returns from. The board greets and then goes silent
+    forever. Clamp the base of any exponent.</p>
   </div>
 </section>
 
 <section>
-  <div class="wrap">
-    <p class="eyebrow">The five states</p>
-    <h2>What the colours mean</h2>
-    <p>These appear only when something on your machine is telling it what your session is doing.
-      The one worth having is <strong>waiting</strong>.</p>
-
-    <ul class="states">
-      <li>
-        <span class="dot" style="background:#3aa0ff"></span>
-        <span class="nm">idle</span>
-        <span class="ds">Blue. A session is open and nothing is running. The eyes blink and look around.</span>
-      </li>
-      <li>
-        <span class="dot" style="background:#ffb020"></span>
-        <span class="nm">busy</span>
-        <span class="ds">Amber, breathing slowly. Your agent is working. The face squints and its gaze
-          tracks back and forth across something only it can see.</span>
-      </li>
-      <li>
-        <span class="dot" style="background:#ffc53d"></span>
-        <span class="nm">waiting</span>
-        <span class="ds"><b>Amber, pulsing, with the head hopping on every beat.</b> Your agent has asked
-          you something and is stopped until you answer. After ten seconds the pulse turns red and
-          doubles in speed. Press the left button and it settles to a steady amber: it knows you know.</span>
-      </li>
-      <li>
-        <span class="dot" style="background:#34c759"></span>
-        <span class="nm">done</span>
-        <span class="ds">One green flash and a happy squint, then back to resting. One finished turn is
-          exactly one flash, never a repeat.</span>
-      </li>
-      <li>
-        <span class="dot" style="background:#4a5a7d"></span>
-        <span class="nm">sleep</span>
-        <span class="ds">Dim, eyes shut, breathing on a four second cycle. Only ever reached because
-          something asked for it.</span>
-      </li>
-    </ul>
-
-    <p class="caption">If the machine that was talking to it goes quiet, the screen dims after thirty
-      seconds and returns to ambient mode after five minutes. It will never sit there pulsing about a
-      question that no longer exists.</p>
+  <h2>Everything the device speaks</h2>
+  <div class="col">
+    <p>One JSON object per line at 115200 baud. Every field is optional and the device keeps the
+    last value it was given, so you can send one key and change one thing. That is the whole
+    protocol, which means anything that can write to a serial port can drive this.</p>
+  </div>
+  <pre><code>{"state":"waiting","ring":0.62,"center":"62%","label":"CTX","sub":"your turn"}</code></pre>
+  <div class="col">
+    <p>It answers <code>ok</code> per accepted line, and greets on boot with its stored name.
+    One quirk to design around: the chip's transmit runs a message behind, so an acknowledgement
+    usually arrives only once the next line is written. Never build a blocking handshake on it.</p>
   </div>
 </section>
-
-<section>
-  <div class="wrap">
-    <p class="eyebrow">Two lines, once</p>
-    <h2>Put your name on it</h2>
-    <p>The name is stored on the device itself. It survives unplugging, and it survives anything done
-      to the firmware later. Up to 24 plain letters: anything outside plain ASCII is dropped before the
-      name is stored, so <code>Jos&eacute;</code> becomes <code>Jos</code> and a name with nothing
-      plain left in it is refused outright. Write accents out. Nothing is printed back to your terminal
-      either way, so the screen is the confirmation: your name appears on it within a second. If more
-      than one path prints, unplug the board, run the first command again, and use the one that
-      vanished.</p>
-
-    <div class="code">
-      <button class="copy" type="button">Copy</button>
-      <pre><span class="c"># find the port the board is on</span>
-ls /dev/cu.usbmodem*
-
-<span class="c"># use whichever path that printed</span>
-printf '{"name":"Your Name"}\n' &gt; /dev/cu.usbmodemXXXX</pre>
-    </div>
-
-    <p>To take it off again, send an empty one: <code>printf '{"name":""}\n'</code> to the same path.
-      Nothing else about the device changes.</p>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <p class="eyebrow">Optional, and genuinely optional</p>
-    <h2>Make it show your live session</h2>
-    <p>There is one file. You run it with Node, in a terminal, in the foreground. While it runs, the
-      screen adds a ring for how full your context window is and a colour for what your Codex session
-      is doing. Ctrl-C ends it completely. It is a bonus, not a requirement.</p>
-
-    <div class="cols">
-      <div class="card yes">
-        <h3>What it does</h3>
-        <ul>
-          <li>Reads <b>two fields</b> of each Codex hook event: the event name, and the path of the
-            session file Codex is already writing.</li>
-          <li>Reads <b>numbers</b> out of that session file: token counts and turn boundaries. Every
-            other line is skipped by a substring test before it is ever parsed.</li>
-          <li>Sends one short JSON line down the USB cable, at most once a second and at least
-            every two seconds.</li>
-          <li>Writes <b>one file</b>, <code>~/.codex/hooks.json</code>, and only if you run
-            <code>install-hook</code>. It prints the exact bytes first.</li>
-        </ul>
-      </div>
-      <div class="card no">
-        <h3>What it never does</h3>
-        <ul>
-          <li><b>It cannot approve or deny anything.</b> Approval prompts stay in your terminal and you
-            answer them, exactly as you would with none of this installed.</li>
-          <li><b>No network.</b> It never requires <code>http</code>, <code>https</code>,
-            <code>net</code>, <code>tls</code>, <code>dns</code> or <code>dgram</code>, and never calls
-            <code>fetch</code>. Grep for them. The one built-in that can run anything,
-            <code>child_process</code>, is used five times: <code>ioreg</code> to find the board,
-            <code>stty</code> to set up the line, <code>lsof</code> to see whether another program
-            has the same serial port open, and <code>node</code> and <code>codex</code> with
-            <code>--version</code>.</li>
-          <li><b>No background service.</b> No launch agent, no daemon, no login item, no cron, nothing
-            that starts itself.</li>
-          <li><b>It never reads your prompts, your code or your output.</b> Everything that reaches the
-            screen is a number, a timestamp, or one of five fixed words.</li>
-        </ul>
-      </div>
-    </div>
-
-    <p style="margin-top:22px">The whole of what goes down the wire is one line like this, and there is
-      no traffic in the other direction beyond the board saying <code>ok</code>:</p>
-
-    <div class="code">
-      <button class="copy" type="button">Copy</button>
-      <pre class="wrap">{"state":"waiting","ring":0.62,"center":"62%","label":"CTX","sub":"your turn"}</pre>
-    </div>
-
-    <p>No tool name, no command, no file path, no model name, no session id. The screen says that you
-      are the one holding things up. Your terminal says what for.</p>
-  </div>
-</section>
-
-<section class="close">
-  <div class="wrap">
-    <h2>Running it</h2>
-    <p>Node 20 or newer. macOS is the supported platform, because it finds the board by asking
-      <code>ioreg</code>. Get <a data-helper href="#">the file</a>, then:</p>
-
-    <div class="code">
-      <button class="copy" type="button">Copy</button>
-      <pre>node codex-companion.js doctor   <span class="c"># look before you leap</span>
-node codex-companion.js          <span class="c"># run it. Ctrl-C stops it.</span></pre>
-    </div>
-
-    <p><code>doctor</code> answers nearly every question in one screen: which serial ports it can see,
-      which one it picked, whether the board answered, which Codex it found, and whether anything in
-      your <code>config.toml</code> means approval prompts never happen (in which case the amber light
-      can never appear, and the device will look broken while working perfectly).</p>
-
-    <h3 style="margin-top:26px">If you want it to follow your session automatically</h3>
-    <p>Register it with Codex's own hook system. This is the only thing here that writes a file.</p>
-
-    <div class="code">
-      <button class="copy" type="button">Copy</button>
-      <pre><span class="c"># print the exact bytes, write nothing</span>
-node codex-companion.js install-hook --dry-run
-
-<span class="c"># print them, then write the file</span>
-node codex-companion.js install-hook</pre>
-    </div>
-
-    <p>It merges into an existing <code>hooks.json</code> rather than replacing it, and adds only its
-      own entries. Codex will not run a hook it has not been told to trust, so the next time you start
-      Codex it says <em>Hooks need review</em>. Approve it there, or list hooks any time with
-      <code>/hooks</code>. Eight events are registered: <code>PermissionRequest</code> is the amber
-      one, <code>Stop</code> is the green one, the tool events are busy, and the session
-      boundaries are idle.</p>
-
-    <h3 style="margin-top:26px">Uninstalling</h3>
-    <div class="code">
-      <button class="copy" type="button">Copy</button>
-      <pre>node codex-companion.js uninstall-hook</pre>
-    </div>
-    <p>It removes exactly what it added, leaves anything else in the file alone, and deletes the file
-      entirely if it held nothing else. Then unplug the board. Nothing else was ever written anywhere.</p>
-
-    <h3 style="margin-top:26px">Checking that yourself</h3>
-    <p>Every claim above is one command away, and none of them need you to trust me:</p>
-    <div class="code">
-      <button class="copy" type="button">Copy</button>
-      <pre>grep -n "require(" codex-companion.js
-<span class="c"># 4 lines: node:fs, node:path, node:os, node:child_process</span>
-
-grep -nE "fetch\(|XMLHttpRequest|WebSocket" codex-companion.js
-grep -nE "require\((.)(node:)?(http|https|net|tls|dns|dgram)" codex-companion.js
-<span class="c"># both silent: it has no way to reach the network</span>
-
-grep -niE "launchctl|launchagent|systemctl|crontab|plist|daemon" codex-companion.js
-<span class="c"># one hit, the comment saying it installs none of those</span></pre>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <p class="eyebrow">No software required</p>
-    <h2>The two buttons</h2>
-    <p>Every gesture here works on a board that has never met a computer. The left button is
-      "tell me something". The right button is the panel controls. The figures on the stats
-      screen are the one thing that needs the optional program: with nothing ever attached they
-      are all zero, because nothing has happened for the board to count.</p>
-
-    <div class="scroller">
-      <table class="btns">
-        <thead>
-          <tr><th>Gesture</th><th>What happens</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Tap left</td><td>Acknowledge a pending question, if there is one. Otherwise open the stats screen: turns, tokens, longest turn and best day, all of which the optional program feeds. Tap again for a focus timer, which needs nothing at all.</td></tr>
-          <tr><td>Tap right</td><td>Step the brightness, one tier per press.</td></tr>
-          <tr><td>Tap both</td><td>Put up a DO NOT DISTURB sign, big enough to read across an open-plan floor. Any single press takes it down.</td></tr>
-          <tr><td>Hold right, 0.8s</td><td>Change the face. Three of them, and it remembers.</td></tr>
-          <tr><td>Hold left, 2s</td><td>A small jumping game, for the ten minutes in the middle of a long turn. The best score is kept.</td></tr>
-          <tr><td>Hold both, 5s</td><td>Factory reset: forget the name, the face and everything else, then play the out-of-the-box sequence again. Only while nothing on your computer is talking to it. On USB power alone that is always true, so do not unplug anything: the board needs power to hold a button for five seconds.</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <p class="caption"><strong>The right button gets you out of anything.</strong> That is the whole exit
-      model, and it is what the on-panel legends say too. On the game, the stats screen and the focus
-      timer the left button is that screen's own action instead: it jumps, it goes on to the timer, and
-      it starts or pauses the clock.</p>
-
-    <p class="caption">Nothing here can ever cover a pending question. Every screen on this device
-      steps aside for the amber pulse. The sign, the message card and the focus timer come back
-      afterwards; the game and the stats screen close, because after answering a question you are
-      back at your keyboard.</p>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <p class="eyebrow">If something looks wrong</p>
-    <h2>It probably is not</h2>
-    <div class="qa">
-      <div>
-        <h3>The screen is black</h3>
-        <p>Unplug it and plug it back in without touching either button. The left button doubles as the
-          chip's boot pin, so holding it while power arrives puts the board into flashing mode instead of
-          starting up: black panel, nothing printed, and it will sit there. A hand gripping the top edge
-          while pushing in a USB-C plug is holding that button. This is the one thing on the device with
-          no rescue on the panel itself, and a replug with no buttons touched is the whole fix.</p>
-      </div>
-      <div>
-        <h3>No port shows up at all</h3>
-        <p>Almost always the cable. A charge-only USB-C cable powers the board perfectly and carries no
-          data, so no port ever appears. Try another cable first, then the other USB socket on the board.</p>
-      </div>
-      <div>
-        <h3>The percentage is stale</h3>
-        <p>The board keeps the last value it was sent. It dims after thirty seconds of silence and goes
-          back to its own animation after five minutes. Nothing is broken.</p>
-      </div>
-      <div>
-        <h3>It never goes amber</h3>
-        <p>Run <code>doctor</code> and read the <code>approvals</code> line. If your Codex config never
-          asks for approval, there is no prompt for the device to show.</p>
-      </div>
-      <div>
-        <h3>It refuses to pick a port</h3>
-        <p>Two boards matched, and it will not guess between them. Name the one you want with
-          <code>--port /dev/cu.usbmodemXXX</code>.</p>
-      </div>
-    </div>
-  </div>
-</section>
-
-<div class="wrap"><div class="rule"></div></div>
 
 <footer>
-  <div class="wrap">
-    <p>Fourteen of these exist. Every one is flashed from the byte-identical image, so the whole batch
-      has one binary and one hash. Each unit works out its own label from the chip's MAC address, and
-      the name on the screen is set afterwards over the cable, which is why nothing here was built
-      per-person.</p>
-    <p style="margin-top:14px">Source, firmware, the host program and the full serial protocol:
-      <a data-repo href="#">the repository</a>.</p>
-  </div>
+  Built for fourteen people. One binary, one hash, no unit compiled differently from any other.
+  Source at <a href="https://github.com/sammarcus/codex-companion">github.com/sammarcus/codex-companion</a>.
 </footer>
+
+</div>
 
 <script>
 (function () {
-  'use strict';
+  "use strict";
 
-  /* ------------------------------------------------------------------
-     Repository links. While REPO_URL is the placeholder, every link to
-     it renders as a visible note instead of a link to nowhere.
-  ------------------------------------------------------------------ */
-  (function () {
-    function wire(sel, url, note) {
-      var nodes = document.querySelectorAll(sel);
-      for (var i = 0; i < nodes.length; i++) {
-        var a = nodes[i];
-        if (url && url !== 'REPLACE-ME') {
-          a.href = url;
-          a.rel = 'noopener';
-        } else {
-          var s = document.createElement('span');
-          s.className = 'missing';
-          s.textContent = note;
-          a.parentNode.replaceChild(s, a);
-        }
-      }
-    }
-    wire('[data-repo]', REPO_URL, 'the repository (link not set yet)');
-    wire('[data-helper]', HELPER_URL, 'the file (link not set yet)');
-  })();
-
-  /* ------------------------------------------------------------------
-     Copy buttons.
-  ------------------------------------------------------------------ */
-  (function () {
-    var btns = document.querySelectorAll('.code .copy');
-    for (var i = 0; i < btns.length; i++) {
-      (function (btn) {
-        btn.addEventListener('click', function () {
-          var pre = btn.parentNode.querySelector('pre');
-          var text = pre.innerText.replace(/[ \t]+$/gm, '');
-          var done = function () {
-            btn.textContent = 'Copied';
-            setTimeout(function () { btn.textContent = 'Copy'; }, 1400);
-          };
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(done, function () { btn.textContent = 'Press to select'; });
-          } else {
-            var r = document.createRange();
-            r.selectNodeContents(pre);
-            var sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(r);
-            btn.textContent = 'Selected';
-            setTimeout(function () { btn.textContent = 'Copy'; }, 1400);
-          }
-        });
-      })(btns[i]);
-    }
-  })();
-
-  /* ==================================================================
-     The panel.
-
-     Everything below is the firmware's own geometry and timing, in the
-     same numbers: firmware/src/main.cpp, firmware/src/FaceRounded.cpp,
-     firmware/src/FaceBear.cpp, firmware/src/FaceArc.cpp, and the notes
-     in firmware/EYES.md and firmware/AMBIENT.md.
-  ================================================================== */
-
-  var W = 320, H = 170;
-
-  /* RGB565 constants from main.cpp, written back as hex. */
   var COL = {
-    sleep:  '#26314A',
-    idle:   '#3AA0FF',
-    busy:   '#FFB020',
-    wait:   '#FFC53D',
-    hot:    '#FF3B30',
-    done:   '#34C759',
-    boot:   '#5B8CFF',
-    teal:   '#2ED3C6',
-    track:  '#181c18',
-    text:   '#FFFFFF',
-    dimtxt: '#838183'
+    idle:    "#4aa3ff",
+    busy:    "#4aa3ff",
+    waiting: "#ffb020",
+    done:    "#39d98a",
+    sleep:   "#4a5768"
   };
 
-  /* Live composition, main.cpp. */
-  var RING_CX = 244, RING_CY = 60, RING_R_OUT = 46, RING_R_IN = 37;
-  var FACE_AMB  = { cx: 160, cy: 62, eyeW: 56, eyeH: 64, gap: 36 };
-  var FACE_LIVE = { cx: 96,  cy: 60, eyeW: 40, eyeH: 48, gap: 26 };
-  var LABEL_Y = 122, SUB_Y = 146;
+  // The rounded face, following the shipping firmware: two rounded rectangles,
+  // a highlight, brows that only appear when it wants you, and a lid line when
+  // it is asleep. Geometry is expressed against a 320x170 panel and scaled.
+  function drawFace(g, W, H, t, state, open, col, opt) {
+    opt = opt || {};
+    var s = W / 320;
+    g.save();
+    g.scale(s, s);
+    var w = 320, h = W ? (H / s) : 170;
 
-  /* Ambient drift, AMBIENT.md. Two periods that do not divide into each other. */
-  var DRIFT_X_MS = 97000, DRIFT_Y_MS = 61000, DRIFT_AX = 9, DRIFT_AY = 5;
-  var AMB_BREATHE_MS = 6500, AMB_HUE_MS = 45000;
+    var cx = w / 2, cy = h / 2 - 4;
+    var eyeW = 46, eyeH = 60, gap = 62;
+    var hop = 0, brow = 0, happy = 0, lid = 1;
 
-  /* ---------- colour helpers ---------- */
+    var breathe = 0.5 + 0.5 * Math.sin(t / 1200);
 
-  /* Colours pass through here as hex, as an rgb() string or as a triple,
-     because mix() and dim() feed each other and the faces take whatever
-     the composition worked out. */
-  function toRGB(c) {
-    if (Array.isArray(c)) return c;
-    if (c.charAt(0) === '#') {
-      return [parseInt(c.substr(1, 2), 16), parseInt(c.substr(3, 2), 16), parseInt(c.substr(5, 2), 16)];
+    if (state === "busy") {
+      lid = 0.62;
+      cx += Math.sin(t / 1700) * 6.5;
+      cy += Math.sin(t / 2600) * 2.0;
+    } else if (state === "waiting") {
+      eyeW = 50; eyeH = 68;
+      var pulse = 0.5 + 0.5 * Math.sin(t / 450);
+      hop = -3 * pulse;
+      brow = 1;
+    } else if (state === "done") {
+      happy = 1;
+    } else if (state === "sleep") {
+      lid = 0.05;
+      cy += -1.6 + 3.2 * breathe;
+    } else {
+      cx += Math.sin(t / 2600) * 7;
+      eyeH = eyeH * (1 + 0.05 * breathe);
     }
-    var m = c.match(/-?\d+(\.\d+)?/g) || [0, 0, 0];
-    return [parseFloat(m[0]), parseFloat(m[1]), parseFloat(m[2])];
-  }
-  function rgb2css(c) {
-    return 'rgb(' + Math.round(clamp(c[0], 0, 255)) + ',' + Math.round(clamp(c[1], 0, 255)) +
-           ',' + Math.round(clamp(c[2], 0, 255)) + ')';
-  }
-  function mix(a, b, u) {
-    var A = toRGB(a), B = toRGB(b);
-    return rgb2css([A[0] + (B[0] - A[0]) * u, A[1] + (B[1] - A[1]) * u, A[2] + (B[2] - A[2]) * u]);
-  }
-  function dim(c, k) {
-    var a = toRGB(c);
-    return rgb2css([a[0] * k, a[1] * k, a[2] * k]);
-  }
-  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
-  function sinP(now, period) { return Math.sin((now % period) / period * Math.PI * 2); }
 
-  /* ---------- the blink driver, EYES.md part 3 ----------
-     Close 70ms on 1-k squared, shut 34ms, open 150ms on a quarter sine.
-     Interval randomised per burst, per state. 7% triple, another 17%
-     double, the halves 110ms apart. Nothing about it is periodic.      */
+    var o = Math.max(0.04, open * lid);
+    cy += hop;
 
-  function makeBlink() {
-    var phase = 'rest', t = 0, left = 0, wait = 2600 + Math.random() * 3800;
-    function window_(state) {
-      if (state === 'busy') return [4200, 9000];
-      if (state === 'waiting') return [1300, 2800];
-      return [2600, 6400];
+    for (var i = 0; i < 2; i++) {
+      var ex = cx + (i ? gap : -gap);
+
+      if (happy) {
+        // a happy squint: an upward bow
+        g.strokeStyle = col;
+        g.lineWidth = 11;
+        g.lineCap = "round";
+        g.beginPath();
+        g.arc(ex, cy + 12, 24, Math.PI * 1.16, Math.PI * 1.84);
+        g.stroke();
+        continue;
+      }
+
+      var eh = eyeH * o;
+      if (eh < 5) {
+        // asleep: the lid line
+        g.strokeStyle = col;
+        g.lineWidth = 3;
+        g.lineCap = "round";
+        g.beginPath();
+        g.moveTo(ex - eyeW / 2, cy);
+        g.lineTo(ex + eyeW / 2, cy);
+        g.stroke();
+        continue;
+      }
+
+      g.fillStyle = col;
+      roundRect(g, ex - eyeW / 2, cy - eh / 2, eyeW, eh, Math.min(eyeW, eh) * 0.42);
+      g.fill();
+
+      // the highlight that makes two rectangles look wet
+      if (o > 0.55) {
+        g.fillStyle = "rgba(255,255,255,.82)";
+        roundRect(g, ex - eyeW / 2 + 8, cy - eh / 2 + 7, 12, Math.min(12, eh * 0.3), 5);
+        g.fill();
+      }
+
+      if (brow) {
+        g.strokeStyle = col;
+        g.lineWidth = 5;
+        g.lineCap = "round";
+        var tilt = i ? -4 : 4;
+        g.beginPath();
+        g.moveTo(ex - 18, cy - eh / 2 - 13 + tilt);
+        g.lineTo(ex + 18, cy - eh / 2 - 13 - tilt);
+        g.stroke();
+      }
     }
-    function roll() { var r = Math.random(); return r < 0.07 ? 3 : (r < 0.24 ? 2 : 1); }
-    return function (dt, state) {
-      if (state === 'sleep') { phase = 'rest'; t = 0; return 0; }
-      t += dt;
-      if (phase === 'rest') {
-        if (t >= wait) { phase = 'close'; t = 0; left = roll() - 1; }
-        return 1;
+
+    if (opt.line1) {
+      g.fillStyle = "rgba(255,255,255,.86)";
+      g.font = "600 15px " + MONO;
+      g.textAlign = "center";
+      g.globalAlpha = opt.a1 == null ? 1 : opt.a1;
+      g.fillText(opt.line1, w / 2, h - 32);
+      g.globalAlpha = 1;
+    }
+    if (opt.line2) {
+      g.fillStyle = "rgba(255,255,255,.42)";
+      g.font = "400 12px " + MONO;
+      g.textAlign = "center";
+      g.globalAlpha = opt.a2 == null ? 1 : opt.a2;
+      g.fillText(opt.line2, w / 2, h - 14);
+      g.globalAlpha = 1;
+    }
+
+    g.restore();
+  }
+
+  var MONO = '"IBM Plex Mono", ui-monospace, monospace';
+
+  function roundRect(g, x, y, w, h, r) {
+    r = Math.min(r, w / 2, h / 2);
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r);
+    g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r);
+    g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+  }
+
+  // Organic blink: fast close, slower open, randomised gap, occasional double.
+  function blinker(rate) {
+    var next = 900 + Math.random() * 2600, phase = 0, dbl = Math.random() < 0.24;
+    rate = rate || 1;
+    return function (dt) {
+      phase += dt * rate;
+      var u = phase - next;
+      if (u < 0) return 1;
+      if (u < 70) return 1 - u / 70;
+      if (u < 104) return 0;
+      if (u < 254) return (u - 104) / 150;
+      if (dbl) {
+        if (u < 390) return 1;
+        if (u < 460) return 1 - (u - 390) / 70;
+        if (u < 610) return (u - 460) / 150;
       }
-      if (phase === 'close') {
-        if (t >= 70) { phase = 'shut'; t = 0; return 0; }
-        var k = t / 70;
-        return 1 - k * k;
-      }
-      if (phase === 'shut') {
-        if (t >= 34) { phase = 'open'; t = 0; }
-        return 0;
-      }
-      if (phase === 'open') {
-        if (t >= 150) {
-          t = 0;
-          if (left > 0) { left--; phase = 'gap'; }
-          else {
-            phase = 'rest';
-            var w = window_(state);
-            wait = w[0] + Math.random() * (w[1] - w[0]);
-          }
-          return 1;
-        }
-        return Math.sin((t / 150) * Math.PI / 2);
-      }
-      if (phase === 'gap') {
-        if (t >= 110) { phase = 'close'; t = 0; }
-        return 1;
-      }
+      phase = 0; next = 900 + Math.random() * 2600; dbl = Math.random() < 0.24;
       return 1;
     };
   }
 
-  /* ---------- the glance driver, EYES.md part 4 ----------
-     Ambient and idle only. Up to 7px across and 3.5px down, magnitude
-     never less than 0.55 of that, and a 110ms exponential ease so the
-     eyes slide rather than snap.                                        */
+  function lerp(a, b, u) { return a + (b - a) * u; }
+  function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
-  function makeGlance() {
-    var gx = 0, gy = 0, tx = 0, ty = 0, away = false;
-    var timer = 4500 + Math.random() * 8500;
-    return function (dt, active) {
-      if (active) {
-        timer -= dt;
-        if (timer <= 0) {
-          if (away) { tx = 0; ty = 0; away = false; timer = 4500 + Math.random() * 8500; }
-          else {
-            var m = 0.55 + Math.random() * 0.45;
-            var a = Math.random() * Math.PI * 2;
-            tx = Math.cos(a) * 7 * m;
-            ty = Math.sin(a) * 3.5 * m;
-            away = true;
-            timer = 700 + Math.random() * 900;
-          }
-        }
-      } else { tx = 0; ty = 0; away = false; }
-      var k = 1 - Math.exp(-dt / 110);
-      gx += (tx - gx) * k;
-      gy += (ty - gy) * k;
-      return { x: gx, y: gy };
-    };
+  function mixHex(a, b, u) {
+    function p(x) { return [parseInt(x.slice(1, 3), 16), parseInt(x.slice(3, 5), 16), parseInt(x.slice(5, 7), 16)]; }
+    var A = p(a), B = p(b);
+    return "rgb(" + Math.round(lerp(A[0], B[0], u)) + "," +
+                    Math.round(lerp(A[1], B[1], u)) + "," +
+                    Math.round(lerp(A[2], B[2], u)) + ")";
   }
 
-  /* ==================================================================
-     Face 1: "rounded". The default, and the one fourteen boards ship on.
-     Ported from firmware/src/FaceRounded.cpp: a rounded rect with a
-     corner radius of 0.42 of its short side, one highlight at 17% / 16%
-     that makes two rectangles look wet, an upward bow for the smile,
-     and two eyebrows that exist for exactly one state.
-  ================================================================== */
+  /* ---------- hero: the real first run sequence ---------- */
 
-  function roundRect(ctx, x, y, w, h, r, fill) {
-    var q = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + q, y);
-    ctx.arcTo(x + w, y, x + w, y + h, q);
-    ctx.arcTo(x + w, y + h, x, y + h, q);
-    ctx.arcTo(x, y + h, x, y, q);
-    ctx.arcTo(x, y, x + w, y, q);
-    ctx.closePath();
-    ctx.fillStyle = fill;
-    ctx.fill();
-  }
+  var hero = document.getElementById("hero");
+  var hg = hero.getContext("2d");
+  var heroBlink = blinker();
+  var seqStart = performance.now();
+  var NAME = "hello";
 
-  function drawOneEye(ctx, ex, ey, w, h, color, gloss) {
-    var iw = Math.max(3, Math.round(w));
-    /* A shut eye is a 3px lid line, never nothing: a vanished eye reads
-       as a rendering fault and a line reads as a blink. */
-    var ih = Math.max(3, Math.round(h));
-    var r = Math.max(1, Math.min(iw, ih) * 0.42);
-    var x0 = Math.round(ex) - iw / 2;
-    var y0 = Math.round(ey) - ih / 2;
-    roundRect(ctx, x0, y0, iw, ih, r, color);
-    if (gloss && ih > 18 && iw > 16) {
-      var gw = iw * 0.26, gh = ih * 0.20;
-      if (gw >= 3 && gh >= 3) {
-        roundRect(ctx, x0 + iw * 0.17, y0 + ih * 0.16, gw, gh, gh / 2, mix(color, '#FFFFFF', 0.55));
-      }
-    }
-  }
+  function drawHero(now, dt) {
+    var W = hero.width, H = hero.height;
+    hg.fillStyle = "#05070a";
+    hg.fillRect(0, 0, W, H);
 
-  function drawHappyEye(ctx, ex, ey, w, color) {
-    /* 202 to 338 degrees is the top of a circle. Put the centre below the
-       eye and the visible slice is an upward bow. The chord across the
-       same angles is 1.854r, so r = w / 1.854 makes the bow exactly as
-       wide as the open eye it replaces. */
-    var rr = Math.max(5, w / 1.854);
-    var t = Math.max(3, rr * 0.30);
-    var ay = ey + rr * 0.6875;
-    ctx.beginPath();
-    ctx.arc(ex, ay, rr - t / 2, 202 * Math.PI / 180, 338 * Math.PI / 180);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = t;
-    ctx.lineCap = 'butt';
-    ctx.stroke();
-  }
+    var e = now - seqStart;          // milliseconds into the sequence
+    var lit = 1, open, col, gaze = 0, a1 = 0, a2 = 0;
+    var l1 = null, l2 = null;
 
-  function drawBrow(ctx, ex, ey, w, nomH, side, tilt, color) {
-    var halfW = w * 0.46;
-    var base = ey - nomH * 0.86;
-    var inner = base + 12 * clamp(tilt, 0, 1);
-    var y0 = base, y1 = base;
-    if (side < 0) y1 = inner; else y0 = inner;
-    ctx.beginPath();
-    ctx.moveTo(ex - halfW, y0);
-    ctx.lineTo(ex + halfW, y1);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 5.2;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  }
-
-  function faceRounded(ctx, f) {
-    var lid = f.open, widthK = 1, gazeX = f.gazeX, gazeY = f.gazeY;
-    var bounceY = 0, happy = false, brows = false, browTilt = 0;
-
-    if (f.ambient) {
-      /* A 5% height swell on the ambient breathe. Two eyes holding one
-         shape between blinks look painted on. */
-      lid *= 0.97 + 0.05 * f.pulse01;
-    } else if (f.state === 'sleep') {
-      widthK = 0.90 + 0.06 * f.pulse01;
-      gazeY += -1.6 + 3.2 * f.pulse01;
-    } else if (f.state === 'busy') {
-      gazeX += 6.5 * sinP(f.now, 1700);
-      gazeY += 2.0 * sinP(f.now, 2600);
-    } else if (f.state === 'waiting') {
-      widthK = f.escalated ? 1.06 : 1.00;
-      bounceY = -(f.escalated ? 5 : 3) * f.pulse01;
-      brows = true;
-      browTilt = f.escalated ? 1 : 0;
-    } else if (f.state === 'done' && f.age < 1600) {
-      happy = true;
-      if (f.age < 300) bounceY = -4 * (1 - f.age / 300);
-    }
-
-    var w = f.eyeW * widthK;
-    var h = f.eyeH * lid;
-    /* Half the gap between eye centres, off the nominal width, so a
-       stretch thickens each eye without pushing the pair apart. */
-    var dx = (f.eyeW + f.gap) * 0.5;
-    var headX = f.cx, headY = f.cy + bounceY;
-    var eyeX = headX + gazeX, eyeY = headY + gazeY;
-
-    for (var i = 0; i < 2; i++) {
-      var side = i === 0 ? -1 : 1;
-      if (happy) drawHappyEye(ctx, eyeX + side * dx, eyeY, w, f.color);
-      else drawOneEye(ctx, eyeX + side * dx, eyeY, w, h, f.color, lid > 0.55);
-      if (brows) drawBrow(ctx, headX + side * dx, headY, w, f.eyeH, side, browTilt, f.color);
-    }
-  }
-
-  /* ==================================================================
-     Face 2: "bear", the Milkbun design. The creature IS the frame: one
-     big rounded body, tiny dot eyes set far apart, a mouth smaller than
-     one eye, blush always on. Expression lives in the mouth and in
-     whole-body squash. The body colour is never the state colour.
-     Taken from the approved reference unchanged.
-  ================================================================== */
-
-  var BEAR = (function () {
-    var CX = 160, FLOOR = 158;
-    var CREAM = '#f6ecdc', CREAM_D = '#e2d3bd', INK = '#2c211a';
-
-    function ell(ctx, cx, cy, rx, ry, fill) {
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, Math.max(0.4, rx), Math.max(0.4, ry), 0, 0, Math.PI * 2);
-      ctx.fillStyle = fill; ctx.fill();
-    }
-    function rr(ctx, x, y, w, h, r, fill) {
-      roundRect(ctx, x, y, Math.max(2, w), Math.max(2, h), r, fill);
-    }
-    function arcs(ctx, cx, cy, r, a0, a1, color, lw) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(0.5, r), a0, a1);
-      ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke();
-    }
-    function seg(ctx, x1, y1, x2, y2, color, lw) {
-      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
-      ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.stroke();
-    }
-    function poly(ctx, pts, fill) {
-      ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
-      for (var i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
-      ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
-    }
-    function spark(ctx, cx, cy, r, fill) {
-      var p = [];
-      for (var i = 0; i < 8; i++) {
-        var a = (Math.PI * 2 * i) / 8 - Math.PI / 2;
-        var rad = (i % 2 === 0) ? r : r * 0.34;
-        p.push(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad);
-      }
-      poly(ctx, p, fill);
-    }
-
-    function motion(t, state) {
-      if (state === 'waiting') {
-        var ph = t / 300;
-        var up = Math.max(0, Math.sin(ph));
-        var down = Math.max(0, -Math.sin(ph));
-        return { sx: 1 - up * 0.05 + down * 0.13, sy: 1 + up * 0.06 - down * 0.13,
-                 hop: up * 13, sway: Math.sin(t / 600) * 5 };
-      }
-      var per, amp, sway, hop, base;
-      if (state === 'busy') { per = 620; amp = 0.022; sway = Math.sin(t / 330) * 3.5; hop = 0; base = 0.98; }
-      else if (state === 'done') { per = 1150; amp = 0.038; sway = Math.sin(t / 880) * 4.5; hop = Math.max(0, Math.sin(t / 880)) * 3; base = 1.0; }
-      else if (state === 'sleep') { per = 3400; amp = 0.052; sway = Math.sin(t / 3400) * 2; hop = 0; base = 0.94; }
-      else { per = 2600; amp = 0.028; sway = Math.sin(t / 1900) * 2.2; hop = 0; base = 1.0; }
-      var br = Math.sin(t / per);
-      return { sx: (1 + amp * br) * (state === 'sleep' ? 1.06 : 1),
-               sy: (1 - amp * br) * base, hop: hop, sway: sway };
-    }
-
-    function eyes(ctx, cx, ey, gap, r, o, state, t) {
-      for (var i = -1; i <= 1; i += 2) {
-        var x = cx + i * gap;
-        if (state === 'done') {
-          var amp = 0.16 + 0.20 * o;
-          arcs(ctx, x, ey + r * 1.5, r * 1.55, Math.PI * (1.5 - amp), Math.PI * (1.5 + amp), INK, 3.2);
-        } else if (state === 'sleep') {
-          var rad = 15 + Math.sin(t / 2400) * 4;
-          arcs(ctx, x, ey + rad * 0.92, rad, Math.PI * 1.36, Math.PI * 1.64, INK, 3.2);
-        } else {
-          var oo = state === 'busy' ? o * 0.82 : o;
-          ell(ctx, x, ey, r * (1 + (1 - oo) * 0.28), Math.max(1.5, r * oo), INK);
-        }
-      }
-    }
-
-    function mouth(ctx, cx, my, state, t) {
-      if (state === 'waiting') {
-        var r = 4.4 + Math.sin(t / 170) * 1.7;
-        ell(ctx, cx, my, r * 0.88, r, INK);
-      } else if (state === 'done') {
-        arcs(ctx, cx, my - 3, 8, Math.PI * 0.16, Math.PI * 0.84, INK, 3);
-      } else if (state === 'busy') {
-        seg(ctx, cx - 5, my, cx + 5, my, INK, 3);
-      } else if (state === 'sleep') {
-        ell(ctx, cx, my, 3.1, 2.5 + Math.sin(t / 2400) * 1.1, INK);
-      } else {
-        arcs(ctx, cx - 2.7, my - 1, 2.9, Math.PI * 0.06, Math.PI * 0.94, INK, 2.5);
-        arcs(ctx, cx + 2.7, my - 1, 2.9, Math.PI * 0.06, Math.PI * 0.94, INK, 2.5);
-      }
-    }
-
-    function blush(ctx, cx, by, gap, rx, ry, state, t, col) {
-      var k = state === 'waiting' ? 1 + Math.abs(Math.sin(t / 170)) * 0.22
-            : state === 'done' ? 1.12 : state === 'sleep' ? 0.9 : 1;
-      ell(ctx, cx - gap, by, rx * k, ry * k, col);
-      ell(ctx, cx + gap, by, rx * k, ry * k, col);
-    }
-
-    function arms(ctx, g, state, t, fur) {
-      var lift = state === 'waiting' ? -32 : state === 'done' ? -17
-               : state === 'sleep' ? 9 : state === 'busy' ? -3 : 2;
-      var swing = state === 'waiting' ? 8 : state === 'busy' ? 5
-                : state === 'done' ? 3 : state === 'sleep' ? 0.8 : 1.6;
-      var per = state === 'waiting' ? 160 : state === 'busy' ? 250
-              : state === 'done' ? 520 : state === 'sleep' ? 3000 : 2000;
-      for (var i = -1; i <= 1; i += 2) {
-        var ph = Math.sin(t / per + (i > 0 ? Math.PI : 0));
-        ell(ctx, g.cx + i * (g.w / 2 - 3), g.top + g.h * 0.60 + lift + ph * swing,
-            g.w * 0.105, g.h * 0.105, fur);
-      }
-    }
-
-    function feet(ctx, g, fur2) {
-      ell(ctx, g.cx - g.w * 0.23, g.bottom - 8, g.w * 0.145, 8, fur2);
-      ell(ctx, g.cx + g.w * 0.23, g.bottom - 8, g.w * 0.145, 8, fur2);
-    }
-
-    function accent(ctx, g, state, t, col) {
-      if (state === 'waiting') {
-        for (var i = 0; i < 3; i++) {
-          var p = Math.abs(Math.sin(t / 200 + i * 0.7));
-          ell(ctx, g.cx + (i - 1) * 17, Math.max(7, g.top - 11 - p * 4),
-              2.2 + p * 2.8, 2.2 + p * 2.8, col);
-        }
-      } else if (state === 'done') {
-        spark(ctx, g.cx - g.w / 2 - 15, g.top + 26, 7 + Math.sin(t / 700) * 1.5, col);
-        spark(ctx, g.cx + g.w / 2 + 15, g.top + 46, 5 + Math.sin(t / 900) * 1.2, col);
-      } else if (state === 'busy') {
-        for (var k = 0; k < 3; k++) {
-          var q = (Math.sin(t / 260 - k * 0.8) + 1) / 2;
-          ell(ctx, g.cx + g.w / 2 + 10 + k * 11, g.top + 22, 1.8 + q * 2.4, 1.8 + q * 2.4, col);
-        }
-      } else if (state === 'sleep') {
-        for (var z = 0; z < 2; z++) {
-          var fz = ((t + z * 1800) % 3600) / 3600;
-          ell(ctx, g.cx + g.w / 2 + 8 + z * 15, Math.max(8, g.top + 30 - fz * 30),
-              2.4 + fz * 3, 2.4 + fz * 3, col);
-        }
-      }
-    }
-
-    /* Milkbun: cream bear, round ears, tiny dot eyes. */
-    var CFG = { w: 146, h: 120, rf: 0.46, fur: CREAM, fur2: CREAM_D, ey: 0.40, gap: 0.20, er: 5 };
-
-    return function (ctx, t, state, open, col) {
-      var o = clamp(open, 0, 1);
-      var m = motion(t, state);
-      var w = CFG.w * m.sx, h = CFG.h * m.sy;
-      var cx = CX + m.sway;
-      var bottom = FLOOR - m.hop, top = bottom - h;
-      var g = { cx: cx, top: top, bottom: bottom, w: w, h: h };
-
-      arms(ctx, g, state, t, CFG.fur);
-      ell(ctx, cx - w * 0.30, top + 7, 17, 16, CREAM);
-      ell(ctx, cx + w * 0.30, top + 7, 17, 16, CREAM);
-      rr(ctx, cx - w / 2, top, w, h, Math.min(w, h) * CFG.rf, CFG.fur);
-      ell(ctx, cx - w * 0.30, top + 3, 8.5, 7.5, CREAM_D);
-      ell(ctx, cx + w * 0.30, top + 3, 8.5, 7.5, CREAM_D);
-      feet(ctx, g, CFG.fur2);
-
-      var drop = state === 'busy' ? 3 : 0;
-      var ey = top + h * CFG.ey + drop;
-      blush(ctx, cx, top + h * (CFG.ey + 0.13) + drop, w * 0.305, w * 0.075, h * 0.055, state, t, col);
-      eyes(ctx, cx, ey, w * CFG.gap, CFG.er, o, state, t);
-      mouth(ctx, cx, top + h * (CFG.ey + 0.155) + drop, state, t);
-      accent(ctx, g, state, t, col);
-    };
-  })();
-
-  /* ==================================================================
-     Face 3: "arc", the Nimbus design. Two curved strokes that swell at
-     the belly and taper into round caps, with a slow bob, a drifting
-     highlight and one sparkle orbiting off the right eye. Serene and
-     unhurried, which is what an open-plan desk asks for.
-     Taken from the approved reference unchanged.
-  ================================================================== */
-
-  var ARC = (function () {
-    var TAU = Math.PI * 2;
-    function lerp(a, b, u) { return a + (b - a) * u; }
-    function pick(state, map) { return map[state] || map.idle; }
-
-    function bez(p0, p1, p2, p3, u) {
-      var m = 1 - u, a = m * m * m, b = 3 * m * m * u, c = 3 * m * u * u, d = u * u * u;
-      return { x: a * p0.x + b * p1.x + c * p2.x + d * p3.x,
-               y: a * p0.y + b * p1.y + c * p2.y + d * p3.y };
-    }
-    function bezD(p0, p1, p2, p3, u) {
-      var m = 1 - u, a = 3 * m * m, b = 6 * m * u, c = 3 * u * u;
-      return { x: a * (p1.x - p0.x) + b * (p2.x - p1.x) + c * (p3.x - p2.x),
-               y: a * (p1.y - p0.y) + b * (p2.y - p1.y) + c * (p3.y - p2.y) };
-    }
-
-    /* Outline of a variable width ribbon along a cubic. wf(u) is the half
-       width, off(u) shifts the centre line along the normal. */
-    function ribbon(ctx, p0, p1, p2, p3, wf, N, u0, u1, off) {
-      N = N || 52; u0 = u0 || 0; u1 = (u1 === undefined) ? 1 : u1;
-      var L = [], R = [], i, u, p, d, len, nx, ny, w, o;
-      for (i = 0; i <= N; i++) {
-        u = u0 + (u1 - u0) * (i / N);
-        p = bez(p0, p1, p2, p3, u);
-        d = bezD(p0, p1, p2, p3, u);
-        len = Math.sqrt(d.x * d.x + d.y * d.y) || 1;
-        nx = -d.y / len; ny = d.x / len;
-        w = wf(u); o = off ? off(u) : 0;
-        L.push({ x: p.x + nx * (o + w), y: p.y + ny * (o + w) });
-        R.push({ x: p.x + nx * (o - w), y: p.y + ny * (o - w) });
-      }
-      ctx.beginPath();
-      ctx.moveTo(L[0].x, L[0].y);
-      for (i = 1; i < L.length; i++) ctx.lineTo(L[i].x, L[i].y);
-      for (i = R.length - 1; i >= 0; i--) ctx.lineTo(R[i].x, R[i].y);
-      ctx.closePath();
-    }
-
-    function dot(ctx, x, y, r) { ctx.beginPath(); ctx.arc(x, y, Math.max(0.35, r), 0, TAU); ctx.fill(); }
-
-    function arcEye(ctx, o) {
-      var hw = o.hw, rise = o.rise;
-      var wMid = Math.max(0.8, o.wMid);
-      var wTip = (o.wTip === undefined) ? wMid * 0.16 : o.wTip;
-      var pw = (o.pow === undefined) ? 1.6 : o.pow;
-      var skew = o.skew || 0, seed = o.seed || 0;
-      var c1 = (o.c1 === undefined) ? 0.42 : o.c1;
-      var c2 = (o.c2 === undefined) ? 0.42 : o.c2;
-      var l1 = (o.lift1 === undefined) ? 1.35 : o.lift1;
-      var l2 = (o.lift2 === undefined) ? 1.35 : o.lift2;
-
-      var p0 = { x: -hw, y: o.dropL || 0 };
-      var p3 = { x: hw, y: o.dropR || 0 };
-      var p1 = { x: -hw * c1, y: -rise * l1 + (o.dropL || 0) * 0.4 };
-      var p2 = { x: hw * c2, y: -rise * l2 + (o.dropR || 0) * 0.4 };
-
-      var wf = function (u) {
-        var s = clamp(u + skew * Math.sin(Math.PI * u), 0, 1);
-        var bell = Math.pow(Math.sin(Math.PI * s), pw);
-        var grain = 1 + 0.055 * Math.sin(u * 7.3 + seed) + 0.028 * Math.sin(u * 13.1 - seed);
-        return Math.max(0.5, (wTip + (wMid - wTip) * bell) * grain);
-      };
-
-      ctx.save();
-      ctx.translate(o.cx, o.cy);
-      if (o.tilt) ctx.rotate(o.tilt);
-
-      if (o.glow) {
-        ctx.globalAlpha = o.glow;
-        ctx.fillStyle = o.col;
-        ribbon(ctx, p0, p1, p2, p3, function (u) { return wf(u) + 2.6; }, 44);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-
-      ctx.fillStyle = o.col;
-      ribbon(ctx, p0, p1, p2, p3, wf, 56);
-      ctx.fill();
-      dot(ctx, p0.x, p0.y, wf(0));
-      dot(ctx, p3.x, p3.y, wf(1));
-
-      if (o.gloss > 0) {
-        var ga = (o.glossAt === undefined) ? 0.34 : o.glossAt;
-        var span = (o.glossSpan === undefined) ? 0.24 : o.glossSpan;
-        ctx.globalAlpha = o.gloss;
-        ctx.fillStyle = '#ffffff';
-        ribbon(ctx, p0, p1, p2, p3,
-          function (u) {
-            var k = clamp((u - (ga - span)) / (2 * span), 0, 1);
-            return Math.max(0.35, wf(u) * 0.26 * Math.sin(Math.PI * k));
-          }, 30, Math.max(0, ga - span), Math.min(1, ga + span),
-          function (u) { return -wf(u) * 0.44; });
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-      ctx.restore();
-    }
-
-    function sparkle(ctx, x, y, r, a, col) {
-      if (a <= 0.02 || r <= 0.2) return;
-      ctx.save();
-      ctx.globalAlpha = clamp(a, 0, 1);
-      ctx.fillStyle = col;
-      ctx.beginPath();
-      ctx.moveTo(x, y - r);
-      ctx.quadraticCurveTo(x + r * 0.17, y - r * 0.17, x + r, y);
-      ctx.quadraticCurveTo(x + r * 0.17, y + r * 0.17, x, y + r);
-      ctx.quadraticCurveTo(x - r * 0.17, y + r * 0.17, x - r, y);
-      ctx.quadraticCurveTo(x - r * 0.17, y - r * 0.17, x, y - r);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-
-    /* Nimbus. */
-    return function (ctx, t, state, open, col) {
-      var T = t / 1000;
-      var s = pick(state, {
-        idle:    { hw: 46, rise: 16, w: 11, bob: 1.7, rate: 0.55, sp: 0.35, sway: 0.8 },
-        busy:    { hw: 40, rise: 10, w: 12, bob: 0.9, rate: 1.55, sp: 0.20, sway: 0.3 },
-        waiting: { hw: 53, rise: 25, w: 13, bob: 4.4, rate: 2.55, sp: 1.00, sway: 3.4 },
-        done:    { hw: 49, rise: 23, w: 12, bob: 1.3, rate: 0.72, sp: 0.80, sway: 0.6 },
-        sleep:   { hw: 43, rise: 4,  w: 13, bob: 0.8, rate: 0.26, sp: 0.06, sway: 0.2 }
-      });
-      var bob = Math.sin(T * s.rate) * s.bob;
-      var sway = Math.sin(T * s.rate * 0.61 + 0.7) * s.sway;
-      var rise = lerp(-s.rise * 0.20, s.rise, open);
-      var w = s.w * (1 + 0.36 * (1 - open));
-      var cy = 92 + bob + (1 - open) * 3;
-      var drift = 0.30 + 0.16 * Math.sin(T * 0.43);
-
-      arcEye(ctx, { cx: 108 + sway * 0.6, cy: cy, hw: s.hw, rise: rise,
-        wMid: w, wTip: w * 0.16, pow: 1.5, tilt: -0.022, skew: 0.06, seed: 1.2,
-        col: col, gloss: 0.5, glossAt: drift, glow: 0.13 });
-      arcEye(ctx, { cx: 214 + sway, cy: cy - 1.6, hw: s.hw * 1.05, rise: rise * 0.93,
-        wMid: w * 0.97, wTip: w * 0.15, pow: 1.68, tilt: 0.03, skew: -0.05, seed: 4.7,
-        col: col, gloss: 0.38, glossAt: drift + 0.1, glow: 0.13 });
-
-      var ang = T * (state === 'waiting' ? 1.9 : 0.42);
-      var pulse = 0.65 + 0.35 * Math.sin(T * (state === 'waiting' ? 7 : 1.3));
-      sparkle(ctx, 246 + Math.cos(ang) * 9, 46 + Math.sin(ang) * 6,
-        3.4 + 1.9 * s.sp * pulse, s.sp * pulse, col);
-    };
-  })();
-
-  /* ------------------------------------------------------------------
-     The two reference faces are authored against the whole 320 by 170
-     panel. On the device they are scaled into whichever box the
-     composition owns, so they are drawn here through the same kind of
-     transform rather than being redrawn per composition.
-  ------------------------------------------------------------------ */
-
-  function drawBearIn(ctx, box, t, state, open, col) {
-    var s = (box.h * 0.78) / 120;          /* the firmware's BODY_FRAC */
-    ctx.save();
-    ctx.translate(box.cx, box.y + box.h);
-    ctx.scale(s, s);
-    ctx.translate(-160, -158);
-    BEAR(ctx, t, state, open, col);
-    ctx.restore();
-  }
-
-  function drawArcIn(ctx, geom, t, state, open, col) {
-    var pairW = geom.eyeW * 2 + geom.gap;
-    var s = pairW / 198;                    /* the firmware's REF_SPAN */
-    ctx.save();
-    ctx.translate(geom.cx, geom.cy);
-    ctx.scale(s, s);
-    ctx.translate(-161, -92);
-    ARC(ctx, t, state, open, col);
-    ctx.restore();
-  }
-
-  /* ==================================================================
-     The ring, the text and the two compositions.
-  ================================================================== */
-
-  function drawRing(ctx, cx, cy, frac, color, level) {
-    var lw = RING_R_OUT - RING_R_IN;
-    var r = (RING_R_OUT + RING_R_IN) / 2;
-    ctx.lineCap = 'butt';
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.strokeStyle = COL.track;
-    ctx.lineWidth = lw;
-    ctx.stroke();
-    if (frac <= 0) return;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(frac, 0, 1));
-    ctx.strokeStyle = dim(color, level);
-    ctx.lineWidth = lw;
-    ctx.stroke();
-  }
-
-  function fitText(ctx, text, sizes, maxW, weight) {
-    for (var i = 0; i < sizes.length; i++) {
-      ctx.font = (weight || '600') + ' ' + sizes[i] + 'px ' + '-apple-system, system-ui, Helvetica, Arial, sans-serif';
-      if (ctx.measureText(text).width <= maxW) return sizes[i];
-    }
-    return sizes[sizes.length - 1];
-  }
-
-  function centreText(ctx, text, x, y, size, color, weight, track) {
-    ctx.save();
-    ctx.font = (weight || '600') + ' ' + size + 'px -apple-system, system-ui, Helvetica, Arial, sans-serif';
-    ctx.fillStyle = color;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    if (track && ctx.letterSpacing !== undefined) ctx.letterSpacing = track + 'px';
-    ctx.fillText(text, x, y);
-    ctx.restore();
-  }
-
-  /* The canned frames the shipped helper actually sends, from
-     docs/protocol.md section 4. */
-  var FRAMES = {
-    sleep:   { ring: 0.00, center: '--',  label: 'CODEX', sub: '' },
-    idle:    { ring: 0.08, center: '8%',  label: 'CTX',   sub: 'idle' },
-    busy:    { ring: 0.62, center: '62%', label: 'CTX',   sub: '3:07 elapsed' },
-    waiting: { ring: 0.62, center: '62%', label: 'CTX',   sub: 'your turn' },
-    done:    { ring: 0.64, center: '64%', label: 'CTX',   sub: '3:21 elapsed' }
-  };
-
-  var cvs = document.getElementById('screen');
-  var ctx = cvs.getContext('2d');
-  var blink = makeBlink();
-  var glance = makeGlance();
-
-  var ui = { mode: 'ambient', state: 'idle', face: 'rounded', name: '', enter: performance.now() };
-
-  function setMode(key) {
-    ui.enter = performance.now();
-    if (key === 'ambient') { ui.mode = 'ambient'; ui.state = 'idle'; }
-    else { ui.mode = 'live'; ui.state = key; }
-  }
-
-  function render(now, dt) {
-    var ambient = ui.mode === 'ambient';
-    var state = ui.state;
-    var age = now - ui.enter;
-
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, W, H);
-
-    /* Colour, and the one number every animation here rides on. */
-    var color, level = 1, pulse01 = 0, escalated = false, ringFrac = 0;
-    var faceOverride = null;
-
-    if (ambient) {
-      /* 45 second drift through two blues and a teal, with a 6.5 second
-         brightness breathe over the whole face. */
-      var u = (now % AMB_HUE_MS) / AMB_HUE_MS * 3;
-      var stops = [COL.idle, COL.teal, COL.boot];
-      var i0 = Math.floor(u) % 3, i1 = (i0 + 1) % 3;
-      color = mix(stops[i0], stops[i1], u - Math.floor(u));
-      pulse01 = 0.5 + 0.5 * sinP(now, AMB_BREATHE_MS);
-      level = 0.55 + 0.40 * pulse01;
-    } else if (state === 'sleep') {
-      /* A dim full-ring breathe, 15% to 45%, on four seconds. The lid is
-         lifted 42% toward the text colour, because C_SLEEP at the sleep
-         backlight tier is very close to invisible and a closed eye still
-         has to read as a closed eye rather than as a blank screen. */
-      color = COL.sleep;
-      pulse01 = 0.5 + 0.5 * sinP(now, 4000);
-      level = 0.15 + 0.30 * pulse01;
-      faceOverride = dim(mix(COL.sleep, '#FFFFFF', 0.42), 0.45 + 0.35 * pulse01);
-      ringFrac = 1;
-    } else if (state === 'idle') {
-      color = COL.idle;
-      pulse01 = 0.5 + 0.5 * sinP(now, 2400);
-      level = 0.86 + 0.14 * pulse01;
-      ringFrac = FRAMES.idle.ring;
-    } else if (state === 'busy') {
-      color = COL.busy;
-      pulse01 = 0.5 + 0.5 * sinP(now, 2400);
-      level = 0.55 + 0.45 * pulse01;
-      ringFrac = FRAMES.busy.ring;
-    } else if (state === 'waiting') {
-      /* The pulse shortens as tokens per second rise, then flips to red
-         and halves at ten seconds. */
-      escalated = age > 10000;
-      var period = escalated ? 450 : 900;
-      pulse01 = 0.5 + 0.5 * sinP(now, period);
-      color = escalated ? COL.hot : COL.wait;
-      level = 0.40 + 0.60 * pulse01;
-      ringFrac = FRAMES.waiting.ring;
+    if (e < 1400) {
+      // a light comes on, over two shut eyes
+      lit = Math.pow(clamp01(e / 1400), 2);
+      open = 0.02;
+      col = COL.sleep;
+    } else if (e < 1700) {
+      open = lerp(0.02, 0.35, (e - 1400) / 300);
+      col = mixHex(COL.sleep, COL.idle, (e - 1400) / 300);
+    } else if (e < 1950) {
+      open = 0.35;                   // the squint hold, the whole trick
+      col = COL.idle;
+    } else if (e < 2300) {
+      var u = (e - 1950) / 350;
+      open = lerp(0.35, 1, 1 - Math.pow(1 - u, 2));
+      col = COL.idle;
     } else {
-      /* done: a 600ms flash that ramps over 120ms, decays, then crosses
-         into the idle look. The face keeps its squint for 1600ms. */
-      ringFrac = FRAMES.done.ring;
-      if (age < 600) {
-        color = COL.done;
-        level = age < 120 ? (age / 120) : (1 - 0.5 * (age - 120) / 480);
-      } else {
-        var k = clamp((age - 600) / 150, 0, 1);
-        color = mix(COL.done, COL.idle, k);
-        level = 0.86;
-      }
-      pulse01 = 0.5 + 0.5 * sinP(now, 2400);
+      open = heroBlink(dt);
+      col = COL.idle;
     }
 
-    var open = blink(dt, ambient ? 'idle' : state);
-    if (!ambient && state === 'done' && age < 1600) open = 1;
-    var gz = glance(dt, ambient || (!ambient && state === 'idle'));
-
-    /* Ambient rides the anti burn-in drift: 9px across on 97 seconds,
-       5px down on 61 seconds. The periods do not divide into each other,
-       so the path never retraces itself. */
-    var ox = 0, oy = 0;
-    if (ambient) {
-      ox = DRIFT_AX * sinP(now, DRIFT_X_MS);
-      oy = DRIFT_AY * sinP(now, DRIFT_Y_MS);
+    if (e >= 2300 && e < 2700) gaze = -7 * clamp01((e - 2300) / 400);
+    else if (e >= 2700 && e < 2950) {
+      var v = (e - 2700) / 250;
+      gaze = -7 * (1 - (1 - Math.pow(1 - v, 2)));   // snaps to centre
     }
 
-    var geom = ambient ? FACE_AMB : FACE_LIVE;
-    var faceCol = faceOverride || dim(color, level);
+    if (e >= 4600) { l1 = "Sam"; a1 = clamp01((e - 4600) / 500); }
+    if (e >= 4800 && e < 7000) { l2 = NAME; a2 = clamp01((e - 4800) / 500); }
+    else if (e >= 7000 && e < 7700) { l2 = NAME; a2 = 1 - clamp01((e - 7000) / 700); }
+    else if (e >= 7700) { l2 = "codex companion"; a2 = clamp01((e - 7700) / 500); }
 
-    ctx.save();
-    ctx.translate(ox, oy);
+    var nod = (e >= 4600 && e < 4950) ? -3 * Math.sin(((e - 4600) / 350) * Math.PI) : 0;
 
-    if (ui.face === 'rounded') {
-      faceRounded(ctx, {
-        cx: geom.cx, cy: geom.cy, eyeW: geom.eyeW, eyeH: geom.eyeH, gap: geom.gap,
-        open: open, gazeX: gz.x, gazeY: gz.y, color: faceCol,
-        state: state, ambient: ambient, pulse01: pulse01,
-        escalated: escalated, age: age, now: now
-      });
-    } else if (ui.face === 'bear') {
-      drawBearIn(ctx, ambient ? { cx: 160, y: 2, h: 116 } : { cx: 96, y: 2, h: 116 },
-        now, ambient ? 'idle' : state, open, faceCol);
-    } else {
-      drawArcIn(ctx, geom, now, ambient ? 'idle' : state, open, faceCol);
-    }
-
-    if (ambient) {
-      /* With a name: the name on the label line, the product name under
-         it. Without: the product name and the unit id. */
-      var top = ui.name ? ui.name : 'codex companion';
-      var bot = ui.name ? 'codex companion' : 'UNIT AB12';
-      var topSize = fitText(ctx, top, [17, 15, 13, 11], 280, '600');
-      centreText(ctx, top, 160, LABEL_Y, topSize, dim('#FFFFFF', 0.55 + 0.45 * pulse01), '600', 0.4);
-      centreText(ctx, bot, 160, SUB_Y, 11, dim(COL.dimtxt, 0.7 + 0.3 * pulse01), '500', 1.1);
-    } else {
-      var f = FRAMES[state];
-      drawRing(ctx, RING_CX, RING_CY, ringFrac, color, level);
-      if (f.center) {
-        var cs = fitText(ctx, f.center, [26, 19, 13], 66, '600');
-        centreText(ctx, f.center, RING_CX, RING_CY, cs, '#FFFFFF', '600', 0);
-      }
-      if (f.label) centreText(ctx, f.label, 160, LABEL_Y, 15, '#FFFFFF', '600', 1.6);
-      if (f.sub) centreText(ctx, f.sub, 160, SUB_Y, 11, COL.dimtxt, '500', 0.5);
-    }
-
-    ctx.restore();
+    hg.save();
+    hg.globalAlpha = lit;
+    hg.translate(gaze * (W / 320), nod * (W / 320));
+    drawFace(hg, W, H, now, "idle", open, col, { line1: l1, a1: a1, line2: l2, a2: a2 });
+    hg.restore();
   }
 
-  /* ---------- sizing for the display's pixel ratio ---------- */
-
-  var dpr = 1;
-  function resize() {
-    dpr = Math.min(3, window.devicePixelRatio || 1);
-    cvs.width = Math.round(W * dpr);
-    cvs.height = Math.round(H * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-  resize();
-  window.addEventListener('resize', resize);
-
-  /* ---------- controls ---------- */
-
-  var STATE_CHIPS = [
-    { key: 'ambient', text: 'ambient', col: '#3aa0ff' },
-    { key: 'idle',    text: 'idle',    col: '#3aa0ff' },
-    { key: 'busy',    text: 'busy',    col: '#ffb020' },
-    { key: 'waiting', text: 'waiting', col: '#ffc53d' },
-    { key: 'done',    text: 'done',    col: '#34c759' },
-    { key: 'sleep',   text: 'sleep',   col: '#6f82a8' }
-  ];
-  var FACE_CHIPS = [
-    { key: 'rounded', text: 'rounded' },
-    { key: 'bear',    text: 'bear' },
-    { key: 'arc',     text: 'arc' }
-  ];
-
-  function buildGroup(el, items, isActive, onPick) {
-    var made = [];
-    items.forEach(function (it) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'chip';
-      b.textContent = it.text;
-      if (it.col) b.style.setProperty('--chip', it.col);
-      b.addEventListener('click', function () {
-        onPick(it.key);
-        made.forEach(function (m) { m.b.setAttribute('aria-pressed', String(isActive(m.it.key))); });
-      });
-      el.appendChild(b);
-      made.push({ b: b, it: it });
-    });
-    made.forEach(function (m) { m.b.setAttribute('aria-pressed', String(isActive(m.it.key))); });
-  }
-
-  buildGroup(document.getElementById('stateGroup'), STATE_CHIPS,
-    function (k) { return k === 'ambient' ? ui.mode === 'ambient' : (ui.mode === 'live' && ui.state === k); },
-    setMode);
-
-  buildGroup(document.getElementById('faceGroup'), FACE_CHIPS,
-    function (k) { return ui.face === k; },
-    function (k) { ui.face = k; });
-
-  var nameInput = document.getElementById('nameInput');
-  nameInput.addEventListener('input', function () {
-    /* The device's own cap, and its own alphabet: 24 characters, and the
-       bitmap fonts on the panel have no glyphs past ASCII. */
-    ui.name = nameInput.value.replace(/[^\x20-\x7e]/g, '').slice(0, 24).trim();
+  document.getElementById("replay").addEventListener("click", function () {
+    seqStart = performance.now();
+    heroBlink = blinker();
   });
 
-  /* ---------- the loop ---------- */
+  /* ---------- the five states ---------- */
 
+  var STATES = [
+    ["idle",    "Nothing is happening. It blinks, glances around, and is content to be ignored."],
+    ["busy",    "Your agent is working. Lids down to a concentrating squint, gaze tracking back and forth, blinking less."],
+    ["waiting", "It needs a decision from you. Eyes wide, brows up, head hopping on every pulse. After ten seconds it escalates and turns red."],
+    ["done",    "The turn finished. A happy squint and one hop, then back to idle. A repeated line will not replay it."],
+    ["sleep",   "Nothing has spoken for a while. Shut, with the lid line breathing on a four second sine."]
+  ];
+
+  var stateEls = [];
+  var host = document.getElementById("states");
+  STATES.forEach(function (s) {
+    var row = document.createElement("div");
+    row.className = "state";
+    row.innerHTML =
+      '<canvas width="384" height="204" role="img" aria-label="' + s[0] + ' expression"></canvas>' +
+      '<div class="sname"><span class="sdot" style="background:' + COL[s[0]] + '"></span>' + s[0] + '</div>' +
+      '<div class="sdesc">' + s[1] + '</div>';
+    host.appendChild(row);
+    var c = row.querySelector("canvas");
+    stateEls.push({ state: s[0], g: c.getContext("2d"), c: c, blink: blinker(s[0] === "waiting" ? 2 : 1) });
+  });
+
+  /* ---------- the timeline ---------- */
+
+  var BEATS = [
+    ["It is asleep", "Nothing on the panel. As far as you can tell it has not woken up yet.", 0],
+    ["The lights come up", "A glow arrives over two shut eyes. Something was sleeping and somebody just opened the door.", 0],
+    ["It cracks an eye", "Then holds there, squinting against the light, before opening the rest of the way. A real eye opens in two moves. One smooth fade reads as a camera shutter.", 0],
+    ["It looks around", "Awake, but it has not found anybody yet.", 0],
+    ["It finds you", "The gaze snaps to centre and stops. Slow enough to see, fast enough to read as being noticed rather than scanned.", 1],
+    ["It blinks", "Then a small nod, and your name appears under it.", 0],
+    ["hello", "The only word this device ever says that is not a name or a number.", 0],
+    ["It settles", "The greeting dissolves into the screen it will wear from now on. Nine seconds, and it has never done this before."]
+  ];
+
+  var tl = document.getElementById("timeline");
+  BEATS.forEach(function (b, i) {
+    var el = document.createElement("div");
+    el.className = "beat" + (b[2] ? " key" : "");
+    el.innerHTML = '<div class="t">' + String(i + 1).padStart(2, "0") + '</div>' +
+                   '<div><h3>' + b[0] + '</h3><p>' + b[1] + '</p></div>';
+    tl.appendChild(el);
+  });
+
+  /* ---------- loop ---------- */
+
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   var last = performance.now();
-  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   function frame(now) {
     var dt = Math.min(64, now - last);
     last = now;
-    try { render(now, dt); }
-    catch (e) {
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
-      centreText(ctx, 'demo unavailable', 160, 85, 14, '#79828f', '500', 0);
-      return;
-    }
-    requestAnimationFrame(frame);
+
+    drawHero(now, dt);
+
+    stateEls.forEach(function (s) {
+      var g = s.g, W = s.c.width, H = s.c.height;
+      g.fillStyle = "#05070a";
+      g.fillRect(0, 0, W, H);
+      drawFace(g, W, H, now, s.state, s.blink(dt), COL[s.state], {});
+    });
+
+    if (!reduced) requestAnimationFrame(frame);
   }
 
+  requestAnimationFrame(frame);
+
   if (reduced) {
-    /* One still frame, rather than nothing at all. */
-    render(performance.now(), 16);
-  } else {
-    requestAnimationFrame(frame);
+    // Still render one honest frame of each.
+    seqStart = performance.now() - 5200;
+    frame(performance.now());
   }
 })();
 </script>
-</body>
-</html>
