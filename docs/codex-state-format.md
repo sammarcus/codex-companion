@@ -13,11 +13,12 @@ is the shipped design.
 **Version basis:** `codex-cli 0.153.4` (npm `@openai/codex@latest`, installed to an isolated
 prefix, see "Install situation"). Source read from `openai/codex` at commit
 `121f91fd5d9dc66017866ce9bdc49f1e182721df` (2026-09-07), cloned to
-`/Users/sam/claude/codex-buddy/vendor/codex`.
+this repo's `vendor/codex`.
 
 **Empirical basis:** one real session captured on 2026-09-07 with 0.153.4, at
 `~/.codex/sessions/2026/09/07/rollout-2026-09-07T06-20-00-01a07a18-2f55-78c3-9976-e71905ebb698.jsonl`,
-copied to `helper/test/fixtures/session-sample.jsonl`. Its turn **failed on expired auth**, so it
+copied to `helper/test/fixtures/session-sample.jsonl` (with two redactions, see section 8).
+Its turn **failed on expired auth**, so it
 contains the session/turn lifecycle lines but no model output, no token accounting, and no
 approval traffic. Those event shapes are documented from source and hand-assembled into
 `helper/test/fixtures/session-sample-synthetic.jsonl`, which is explicitly marked synthetic.
@@ -493,7 +494,7 @@ which is desktop-app scheduling. No approval queue, no session state.
 
 | File | Provenance |
 |---|---|
-| `helper/test/fixtures/session-sample.jsonl` | **Real.** Captured 2026-09-07 with codex-cli 0.153.4. 9 lines, 67 KB, verbatim from a real rollout. Line kinds in order: `session_meta`, `task_started`, `response_item`(message) x2, `world_state`, `turn_context`, `response_item`(message), `item_completed`(UserMessage), `task_complete`(with error) |
+| `helper/test/fixtures/session-sample.jsonl` | **Real, with two redactions.** Captured 2026-09-07 with codex-cli 0.153.4. 9 lines, 32 KB. Redacted before publishing: the home directory of the recording machine is written `/Users/you`, and the injected skills listing (lines 3 and 5) keeps one entry as a shape example in place of that machine's installed skills. Every other byte is as captured, and no line, kind, field or number changed. Line kinds in order: `session_meta`, `task_started`, `response_item`(message) x2, `world_state`, `turn_context`, `response_item`(message), `item_completed`(UserMessage), `task_complete`(with error) |
 | `helper/test/fixtures/session-sample-synthetic.jsonl` | **Synthetic, hand-assembled from source.** First line is a `_SYNTHETIC_NOTE` marker. Covers `token_usage_record`, `token_count` (with rate limits), `item_completed`(AgentMessage), a successful `task_complete`, `turn_aborted`, and the two approval payloads (each preceded by a note that they are never written to the rollout). Field names and types are verified against the structs; **values are invented** |
 
 The real capture is thin because the turn failed on expired auth (HTTP 401 on

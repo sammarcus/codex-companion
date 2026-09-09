@@ -1,4 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Codex Desk Companion</title>
+<meta name="description" content="A small thing on your desk that shows your Codex session as a face, and tells you across the room when your agent is waiting on you.">
+<link rel="canonical" href="https://sa.mmarc.us/codex-companion.html">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://sa.mmarc.us/codex-companion.html">
+<meta property="og:title" content="Codex Desk Companion">
+<meta property="og:description" content="A small thing on your desk that shows your Codex session as a face, and tells you across the room when your agent is waiting on you.">
+<meta property="og:image" content="https://sa.mmarc.us/codex-companion-card.png">
+<meta property="og:image:alt" content="The companion's screen, showing the resting face.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Codex Desk Companion">
+<meta name="twitter:description" content="A small thing on your desk that shows your Codex session as a face, and tells you across the room when your agent is waiting on you.">
+<meta name="twitter:image" content="https://sa.mmarc.us/codex-companion-card.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
   :root {
@@ -316,6 +333,8 @@
     * { animation: none !important; transition: none !important; }
   }
 </style>
+</head>
+<body>
 
 <div class="wrap">
 
@@ -332,6 +351,8 @@
     <p>Plug it into any USB port or charger and it works. There is no app, no account,
     no pairing, and no network of any kind. The software further down this page is a bonus
     you can ignore forever.</p>
+    <p>The two buttons carry the rest of it with nothing attached: a do-not-disturb sign,
+    the day's counters, a pomodoro, and a game to play through a long turn.</p>
   </div>
 
   <div>
@@ -355,6 +376,9 @@
     <p>The face is the whole interface. Each state has an expression, and the ring beneath it
     carries the number when a host is connected. Nothing here needs reading, which is the point:
     you catch it in peripheral vision while you are doing something else.</p>
+    <p>These five are what a host drives. With nothing on the other end of the cable, or after
+    five minutes of silence from something that was there, it runs an ambient screen of its own
+    instead, so a board on a desk with no software never sits looking asleep or broken.</p>
   </div>
   <div class="states" id="states"></div>
 </section>
@@ -365,8 +389,9 @@
     <p>A brand new board plays this once, then never again. The flag that arms it lives in a
     region of flash that reflashing does not touch, so every unit can be built, tested and
     powered a dozen times and still owe its owner the whole thing.</p>
-    <p>It is a creature waking up, not a device starting. It takes about nine seconds, the only
-    words are your name and <code>hello</code>, and it needs no software to happen.</p>
+    <p>It is a creature waking up, not a device starting. It takes about nine seconds, it says
+    three things (<code>Hi OpenAI</code>, your name, <code>hello</code>), and it needs no
+    software to happen.</p>
   </div>
   <div class="tl" id="timeline"></div>
 </section>
@@ -374,9 +399,11 @@
 <section>
   <h2>The optional program</h2>
   <div class="col">
-    <p>If you want the device to follow your actual Codex session, there is one command. It
-    fetches a single file from the public repository and runs it. Nothing is installed, nothing
-    is left behind, and it is small enough to read in full first.</p>
+    <p>If you want the device to follow your actual Codex session, there is one command. npm
+    fetches the repository, caches it under <code>~/.npm/_npx</code> and runs it from there.
+    Nothing goes on your PATH, nothing is installed globally, and nothing is written to your
+    Codex config until you run <code>install-hook</code>. Delete the cache with
+    <code>rm -rf ~/.npm/_npx</code>. It is one file, small enough to read in full first.</p>
   </div>
   <div class="claims" style="margin:26px 0">
     <div class="claim">
@@ -385,19 +412,19 @@
       decision, and this one always declines to, twice over: it writes nothing to standard output,
       and it registers asynchronously, either of which alone makes Codex discard a verdict. You
       still approve in your own terminal.</p>
-      <p class="how">grep the file for the word decision</p>
+      <p class="how">grep -n 'stdout.write' the file: three hits, all usage printing, none in cmdHook</p>
     </div>
     <div class="claim">
       <h3>It reads counters, not content</h3>
       <p>Token counts, timestamps and state names. It never retains the text of your prompts, your
       code, or the model's replies. A test in the suite walks everything it extracts and fails if
       any value is a string.</p>
-      <p class="how">npm test, then read test/metrics.test.js</p>
+      <p class="how">npm test, then read helper/test/metrics.test.js</p>
     </div>
     <div class="claim">
       <h3>It has no dependencies and no network</h3>
-      <p>One file, four imports, all from the Node standard library. Nothing is installed, nothing
-      persists, and there is no HTTP client anywhere in it. Closing the terminal ends it completely.</p>
+      <p>One file, four imports, all from the Node standard library. There is no HTTP client
+      anywhere in it, and closing the terminal ends it completely.</p>
       <p class="how">grep for require of http, https, net, tls, dns, or fetch</p>
     </div>
   </div>
@@ -658,18 +685,89 @@ npx github:sammarcus/codex-companion doctor</code></pre>
       gaze = -7 * (1 - (1 - Math.pow(1 - v, 2)));   // snaps to centre
     }
 
-    if (e >= 4600) { l1 = "Sam"; a1 = clamp01((e - 4600) / 500); }
-    if (e >= 4800 && e < 7000) { l2 = NAME; a2 = clamp01((e - 4800) / 500); }
-    else if (e >= 7000 && e < 7700) { l2 = NAME; a2 = 1 - clamp01((e - 7000) / 700); }
-    else if (e >= 7700) { l2 = "codex companion"; a2 = clamp01((e - 7700) / 500); }
+    if (e >= 5450) { l1 = "Sam"; a1 = clamp01((e - 5450) / 500); }
+    if (e < 8000) {
+      l2 = NAME;
+      a2 = clamp01((e - 5650) / 500) * (1 - clamp01((e - 7650) / 350));
+    } else {
+      l2 = "codex companion";
+      a2 = clamp01((e - 8000) / 350);
+    }
 
-    var nod = (e >= 4600 && e < 4950) ? -3 * Math.sin(((e - 4600) / 350) * Math.PI) : 0;
+    var nod = (e >= 5450 && e < 5800) ? -3 * Math.sin(((e - 5450) / 350) * Math.PI) : 0;
 
     hg.save();
     hg.globalAlpha = lit;
     hg.translate(gaze * (W / 320), nod * (W / 320));
     drawFace(hg, W, H, now, "idle", open, col, { line1: l1, a1: a1, line2: l2, a2: a2 });
     hg.restore();
+
+    // The hand does not ride the gaze or the nod: it rises into the text band,
+    // which is composition and not part of the face.
+    hg.save();
+    hg.globalAlpha = lit;
+    drawGreeting(hg, W, e, col);
+    hg.restore();
+  }
+
+  // The greeting beat, following the firmware: a hand rises into the empty text
+  // band beside "Hi OpenAI", sweeps three times and drops. 1600ms end to end,
+  // 300ms up and 300ms down, and the sweep runs only in the middle so the hand
+  // starts and ends at exactly upright instead of snapping back.
+  var GR_T = 3650, GR_MS = 1600, GR_IN = 300, GR_OUT = 300;
+  var GR_TXT = "Hi OpenAI", GR_Y = 138, GR_RISE = 46, GR_GAP = 9, GR_HAND_W = 20;
+
+  function drawGreeting(g, W, e, col) {
+    var u = e - GR_T;
+    if (u < 0 || u >= GR_MS) return;
+
+    var lift = 1, alpha = 1, k;
+    if (u < GR_IN) {
+      k = u / GR_IN;
+      lift = Math.sin(k * Math.PI / 2);   // arrives softly
+      alpha = k;
+    } else if (u >= GR_MS - GR_OUT) {
+      k = (u - (GR_MS - GR_OUT)) / GR_OUT;
+      lift = 1 - k * k;                   // lowered, not switched off
+      alpha = 1 - k;
+    }
+    if (alpha <= 0) return;
+
+    var deg = 0;
+    if (u >= GR_IN && u < GR_MS - GR_OUT) {
+      var m = (u - GR_IN) / (GR_MS - GR_OUT - GR_IN);
+      deg = 23 * Math.sin(m * 3 * 2 * Math.PI);
+    }
+
+    var s = W / 320;
+    g.save();
+    g.scale(s, s);
+    g.globalAlpha *= alpha;
+
+    g.font = "600 15px " + MONO;
+    g.textAlign = "left";
+    g.textBaseline = "middle";
+    var tw = g.measureText(GR_TXT).width;
+    var left = 160 - (tw + GR_GAP + GR_HAND_W) / 2;
+
+    g.fillStyle = "rgba(255,255,255,.86)";
+    g.fillText(GR_TXT, left, GR_Y);
+
+    // Painted in the face's own colour: it is the creature's hand coming up
+    // from off the panel, not a piece of chrome.
+    g.translate(left + tw + GR_GAP + GR_HAND_W / 2, GR_Y + (1 - lift) * GR_RISE);
+    g.rotate(deg * Math.PI / 180);
+    g.fillStyle = col;
+    roundRect(g, -8, -11, 16, 20, 6);
+    g.fill();
+    for (var f = 0; f < 3; f++) {
+      roundRect(g, -7.5 + f * 5, -16, 4, 8, 2);
+      g.fill();
+    }
+    roundRect(g, 6, -6, 5, 9, 2.5);
+    g.fill();
+
+    g.restore();
   }
 
   document.getElementById("replay").addEventListener("click", function () {
@@ -709,8 +807,9 @@ npx github:sammarcus/codex-companion doctor</code></pre>
     ["It cracks an eye", "Then holds there, squinting against the light, before opening the rest of the way. A real eye opens in two moves. One smooth fade reads as a camera shutter.", 0],
     ["It looks around", "Awake, but it has not found anybody yet.", 0],
     ["It finds you", "The gaze snaps to centre and stops. Slow enough to see, fast enough to read as being noticed rather than scanned.", 1],
-    ["It blinks", "Then a small nod, and your name appears under it.", 0],
-    ["hello", "The only word this device ever says that is not a name or a number.", 0],
+    ["It blinks", "Then a beat of nothing. It has seen you and has not said anything yet.", 0],
+    ["It waves", "A hand rises into the empty text band beside the words <code>Hi OpenAI</code>, sweeps three times and drops. The one thing this device ever says to the room instead of to its owner.", 0],
+    ["It says whose it is", "A small nod, your name fades in, and <code>hello</code> under it. You do not say whose desk you are on before you have said hello, so the greeting goes first.", 0],
     ["It settles", "The greeting dissolves into the screen it will wear from now on. Nine seconds, and it has never done this before."]
   ];
 
@@ -753,3 +852,6 @@ npx github:sammarcus/codex-companion doctor</code></pre>
   }
 })();
 </script>
+
+</body>
+</html>

@@ -21,7 +21,10 @@ const {
   commandParts,
   portOpenAdvice,
   wrapText,
-  hookCommand
+  hookCommand,
+  invocation,
+  plural,
+  NPX_INVOCATION
 } = require('../codex-companion');
 
 const CLI = path.join(__dirname, '..', 'codex-companion.js');
@@ -167,10 +170,44 @@ test('a port that will not open is diagnosed by its errno', (t) => {
   assert.match(flat(res.stdout), /Replug it and re-run/);
 });
 
-test('a missing hooks.json is a failure with the command to fix it', (t) => {
+test('a missing hooks.json is the next step, not a failure', (t) => {
+  // The pitch is that the program is optional, so the state everybody starts
+  // in cannot be the first red word they ever see from this project. It still
+  // says what to do about it, and it is still counted, separately.
   const res = doctor(tmpdir(t));
-  assert.match(res.stdout, /FAIL +hooks\.json {2}.*not present/);
+  assert.match(res.stdout, /NEXT +hooks\.json {2}.*not installed yet/);
+  assert.doesNotMatch(res.stdout, /FAIL +hooks\.json/);
   assert.match(res.stdout, /install-hook/);
+  assert.match(res.stdout, /1 thing to do/);
+});
+
+test('the summary counts things to do apart from problems', (t) => {
+  // --port names a path that does not exist, so there is exactly one real
+  // problem (the port) and one thing to do (the hook).
+  const res = doctor(tmpdir(t));
+  assert.match(res.stdout, /1 thing to do, 1 problem\b/);
+  assert.doesNotMatch(res.stdout, /problem\(s\)/);
+});
+
+test('plural writes a count nobody has to read as problem(s)', () => {
+  assert.strictEqual(plural(1, 'problem'), '1 problem');
+  assert.strictEqual(plural(0, 'problem'), '0 problems');
+  assert.strictEqual(plural(2, 'warning'), '2 warnings');
+});
+
+test('advice run from an npx cache names the one-liner, not the cache path', () => {
+  // npx unpacks into ~/.npm/_npx/<hash>/, which is an npm implementation
+  // detail: unreadable to paste, and gone after `npm cache clean`. Everybody
+  // who lands there typed the one-liner, so it is what they get back.
+  const cached =
+    '/Users/you/.npm/_npx/8a9a070704c05c28/node_modules/codex-companion/helper/codex-companion.js';
+  assert.strictEqual(invocation(cached), NPX_INVOCATION);
+  assert.match(NPX_INVOCATION, /^npx github:/);
+  // A clone or a global install has a real path, and keeps it.
+  assert.strictEqual(
+    invocation('/Users/you/codex-buddy/helper/codex-companion.js'),
+    'node /Users/you/codex-buddy/helper/codex-companion.js'
+  );
 });
 
 test('a hooks.json that is not JSON is refused, loudly, with a reason', (t) => {
@@ -341,14 +378,14 @@ test('the report keeps the sections people were told to look at', (t) => {
   assert.match(res.stdout, /ambient mode forever/);
 });
 
-test('every failure in the report carries a remedy', (t) => {
+test('every finding in the report carries a remedy', (t) => {
   const home = tmpdir(t);
   fs.writeFileSync(path.join(home, 'config.toml'), 'approval_policy = "never"\n');
   const res = doctor(home);
   const lines = res.stdout.split('\n');
   let checked = 0;
   for (let i = 0; i < lines.length; i += 1) {
-    if (!/^ {2}(FAIL|WARN) /.test(lines[i])) continue;
+    if (!/^ {2}(FAIL|WARN|NEXT) /.test(lines[i])) continue;
     checked += 1;
     assert.match(lines[i + 1] || '', /^ {7}-> /, `no remedy after: ${lines[i]}`);
   }

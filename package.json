@@ -20,5 +20,5 @@
     "test": "cd helper && node --test \"test/**/*.test.js\"",
     "start": "node helper/codex-companion.js run"
   },
-  "files": ["helper/codex-companion.js", "README.md", "LICENSE"]
+  "files": ["helper/codex-companion.js", "helper/package.json", "helper/test", "README.md", "LICENSE"]
 }

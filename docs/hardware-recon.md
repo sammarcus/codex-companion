@@ -5,7 +5,7 @@ Source clones (local, read-only recon, no flashing, boards not attached):
 - `vendor/T-Display-S3` = https://github.com/Xinyuan-LilyGO/T-Display-S3, commit `ec889e789b3cf093412689a143f7f37b42b56af7` (2026-08-31)
 - `vendor/LovyanGFX` = https://github.com/lovyan03/LovyanGFX, commit `45dc36beb61f67dfd33a19954a1227acb02cad25` (2026-08-25)
 
-All paths below are relative to `/Users/sam/claude/codex-buddy/vendor/`. Every value has a file+line cite. Nothing here was flashed or hardware-verified, it's static repo recon only.
+All paths below are relative to this repo's `vendor/`. Every value has a file+line cite. Nothing here was flashed or hardware-verified, it's static repo recon only.
 
 ---
 

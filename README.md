@@ -3,18 +3,27 @@
 A small creature on the end of a USB cable that watches your Codex session and
 tells you when it needs you.
 
-<!-- PHOTO AND CLIP GO HERE. Neither file exists yet. Shoot them, drop them at
-  these exact paths, and replace this comment with the two image lines.
+![The panel during the first run, rendered from the site's own face code](site/codex-companion-card.png)
+
+That is a render, not a photograph, and it doubles as the link preview image for
+the site.
+
+<!-- Still to shoot, and better than the render above:
   docs/media/hero.jpg: the board on a desk, powered, resting face showing, from
   slightly above so the panel is readable and the cable is in frame. Landscape,
   1600px or wider.       ![The companion at rest](docs/media/hero.jpg)
-  docs/media/firstrun.gif: the 8.6 second first-run sequence in one take, dark
+  docs/media/firstrun.gif: the 9.25 second first-run sequence in one take, dark
   to settled face, no cuts, looping, under 5MB. Then it plays inline on GitHub.
   ![The first run](docs/media/firstrun.gif) -->
 
 It is a LILYGO T-Display-S3: an ESP32-S3 with a 320x170 colour LCD, two buttons
 and a native USB port. There are fourteen of them. Every one runs the
 byte-identical binary.
+
+- **The device needs none of this.** Plug it into any USB port and it is done.
+- **The optional host program, if you want one:** `npx github:sammarcus/codex-companion`
+- **One page on what it is:** <https://sa.mmarc.us/codex-companion.html>
+- **Source:** <https://github.com/sammarcus/codex-companion>
 
 ## Why it exists
 
@@ -33,11 +42,12 @@ the rest of its day.
 decision bends to it. On USB power alone, with nothing on the other end of the
 cable, it is a complete object:
 
-- **It wakes up.** The first time it is ever powered it plays an 8.6 second
+- **It wakes up.** The first time it is ever powered it plays a 9.25 second
   out-of-the-box sequence: dark, a light comes up on two shut eyes, they crack
-  open, squint, look around, find the person in front of them, blink, nod, and
-  say whose it is. It plays exactly once, and its last second already is the
-  resting composition, so the settle is invisible.
+  open, squint, look around, find the person in front of them, blink, wave a
+  hand at the room over the words `Hi OpenAI`, and then nod and say whose it is.
+  It plays exactly once, and its last second already is the resting
+  composition, so the settle is invisible.
   [`firmware/FIRSTRUN.md`](firmware/FIRSTRUN.md).
 - **It stays alive.** The resting animation never stops moving and never shows
   an error, a spinner or a "waiting for host" message. It drifts on two sine
@@ -79,11 +89,16 @@ claims matter more than the rest, and both are provable in under a minute:
   on a `waiting` frame is always the literal string `your turn`.
 
 ```bash
-cd helper
-node codex-companion.js doctor          # look before you leap
-node codex-companion.js install-hook    # prints the file, then writes it
-node codex-companion.js uninstall-hook  # removes exactly what it added
+npx github:sammarcus/codex-companion            # run it, foreground, Ctrl-C to stop
+npx github:sammarcus/codex-companion doctor     # look before you leap
+npx github:sammarcus/codex-companion install-hook    # prints the file, then writes it
+npx github:sammarcus/codex-companion uninstall-hook  # removes exactly what it added
 ```
+
+`npx` caches the repository under `~/.npm/_npx` and runs it from there: nothing
+goes on your PATH, nothing is installed globally, and there is no build step.
+`rm -rf ~/.npm/_npx` removes it. From a clone, `node helper/codex-companion.js
+<command>` is the same program.
 
 `install-hook` writes one file, `~/.codex/hooks.json`, merging into whatever is
 already there, and Codex will not run a hook it has not been told to trust, so
@@ -160,16 +175,16 @@ codex-buddy/
 │   ├── verification.md    every claim in this file, with the command for it
 │   ├── architecture.md    why it is shaped like this, and what got reversed
 │   └── NEEDS-EYES.md and open-questions.md, the two lists of what is unsettled
-├── site/index.html        the one-page site the card points at
+├── site/                  index.html, the one-page site the card points at,
+│                         and codex-companion-card.png, its link preview image
 └── vendor/                git-ignored: reference clones, never redistributed
 ```
 
 ## Licences
 
-`helper/package.json` declares `"license": "MIT"` for the host program. There is
-no repository-root `LICENSE` file yet, so the firmware has no explicit licence
-declaration. That is a real gap and it is named here rather than papered over.
-`vendor/` is in `.gitignore` and nothing under it is tracked (`git ls-files
+MIT, declared at the repository root in [`LICENSE`](LICENSE) and in both
+`package.json` files, so the firmware and the host program are covered by the
+same terms. `vendor/` is in `.gitignore` and nothing under it is tracked (`git ls-files
 vendor | wc -l` returns 0): shallow clones of openai/codex,
 Xinyuan-LilyGO/T-Display-S3, lovyan03/LovyanGFX and
 anthropics/claude-desktop-buddy, read while this was written and cited by path

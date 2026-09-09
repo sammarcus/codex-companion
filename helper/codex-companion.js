@@ -1399,6 +1399,24 @@ function selfPath() {
   return __filename;
 }
 
+/** The one-liner on the card, which is how almost everybody gets here. */
+const NPX_INVOCATION = 'npx github:sammarcus/codex-companion';
+
+/**
+ * The command to hand a reader, written the way they invoked us.
+ *
+ * npx unpacks this package into a content-hashed cache directory
+ * (~/.npm/_npx/<hash>/node_modules/...), so __filename over there is an npm
+ * implementation detail: unreadable at a glance, and gone the moment somebody
+ * runs `npm cache clean`. Anyone seeing that path typed the one-liner to get
+ * here, so give the one-liner back. A clone or a global install has a real
+ * path that is worth naming, and keeps it.
+ */
+function invocation(self) {
+  const from = self === undefined ? selfPath() : self;
+  return /[/\\]_npx[/\\]/.test(from) ? NPX_INVOCATION : `node ${from}`;
+}
+
 /**
  * Candidate node binaries, best first. A hooks.json entry has to name a node
  * binary, and naming the one we happen to be running names a version-specific
@@ -1907,14 +1925,19 @@ function makeReport() {
     heading: (text) => rows.push({ level: 'heading', label: text }),
     plain: (label, detail) => add('plain', label, detail),
     ok: (label, detail) => add('ok', label, detail),
+    // A step nobody has taken yet. Not a failure: the program is optional and
+    // the device works with no host at all, so "the hook is not installed" is
+    // where every reader starts rather than something that went wrong.
+    next: (label, detail, fix) => add('next', label, detail, fix),
     warn: (label, detail, fix) => add('warn', label, detail, fix),
     fail: (label, detail, fix) => add('fail', label, detail, fix),
     failures: () => rows.filter((r) => r.level === 'fail').length,
-    warnings: () => rows.filter((r) => r.level === 'warn').length
+    warnings: () => rows.filter((r) => r.level === 'warn').length,
+    todos: () => rows.filter((r) => r.level === 'next').length
   };
 }
 
-const VERDICT = { ok: 'ok  ', warn: 'WARN', fail: 'FAIL', plain: '    ' };
+const VERDICT = { ok: 'ok  ', next: 'NEXT', warn: 'WARN', fail: 'FAIL', plain: '    ' };
 
 function printReport(report, width) {
   const w = width || 66;
@@ -1929,6 +1952,11 @@ function printReport(report, width) {
     if (!row.fix) continue;
     for (const chunk of wrapText(row.fix, w)) say(`       -> ${chunk}`);
   }
+}
+
+/** `1 problem`, `2 problems`: a count nobody has to read as `problem(s)`. */
+function plural(n, noun) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
 
 /** Greedy wrap, so a remedy reads as prose instead of running off the screen. */
@@ -2105,11 +2133,11 @@ function cmdDoctor(opts) {
   const hooksFile = readJsonFile(hooksPath);
   let registered = [];
   if (!fs.existsSync(hooksPath)) {
-    r.fail(
+    r.next(
       'hooks.json',
-      'not present',
-      `Nothing is registered, so no event can reach the board. Run: ` +
-        `node ${selfPath()} install-hook`
+      'not installed yet',
+      `Nothing is registered yet, so no event can reach the board. Run: ` +
+        `${invocation()} install-hook`
     );
   } else if (hooksFile === null) {
     r.fail(
@@ -2127,7 +2155,7 @@ function cmdDoctor(opts) {
       r.fail(
         'our hook',
         'NOT registered',
-        `The file is there and it is somebody else's. Run: node ${selfPath()} ` +
+        `The file is there and it is somebody else's. Run: ${invocation()} ` +
           `install-hook . It merges in and touches nothing that is already there.`
       );
     } else {
@@ -2274,14 +2302,16 @@ function cmdDoctor(opts) {
 
   const failed = r.failures();
   const warned = r.warnings();
+  const todo = r.todos();
   say('');
-  if (failed === 0 && warned === 0) {
+  if (failed === 0 && warned === 0 && todo === 0) {
     say('Everything checks out.');
   } else {
-    say(
-      `${failed} problem(s) and ${warned} warning(s). Each one above is ` +
-        `followed by what to do about it.`
-    );
+    const parts = [];
+    if (todo > 0) parts.push(`${todo} thing${todo === 1 ? '' : 's'} to do`);
+    parts.push(plural(failed, 'problem'));
+    if (warned > 0) parts.push(plural(warned, 'warning'));
+    say(`${parts.join(', ')}. Each one above is followed by what to do about it.`);
   }
   say('The device itself needs none of this: with no host at all it runs its');
   say('own ambient mode forever. Every finding here is about the extras.');
@@ -3258,6 +3288,9 @@ module.exports = {
   scanHookState,
   commandParts,
   wrapText,
+  plural,
+  invocation,
+  NPX_INVOCATION,
   // cli
   parseArgs,
   main,
