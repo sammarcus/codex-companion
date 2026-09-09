@@ -3,7 +3,7 @@
 The out-of-the-box moment. Someone opens a box, plugs this into any USB port,
 and before they have read a single word the object has to do something.
 
-An armed board plays an 8.6 second sequence once, and then never again. A brand
+An armed board plays a 9.25 second sequence once, and then never again. A brand
 new board used to boot straight into ambient, which is exactly right for hour
 two and wasted on second one: the ambient screen is designed to be ignorable,
 and the one moment it is guaranteed to be watched is the one moment it should
@@ -27,8 +27,31 @@ dissolves. The eyes crack open, hold a squint, and then open fully: a real eye
 opens in two moves against the light, and one smooth ramp reads as a shutter.
 The gaze drifts off to one side, then snaps back to centre. That snap is the
 beat the whole sequence exists for, the moment of being noticed. Then a first
-blink, a small nod, the owner's name fading in, and `hello` under it. At the
-end `hello` dips through black and the ambient second line fades in behind it.
+blink. Then a hand rises into frame beside the words `Hi OpenAI`, waves three
+times and drops back out. Then a small nod, the owner's name fading in, and
+`hello` under it. At the end `hello` dips through black and the ambient second
+line fades in behind it.
+
+**The wave sits where it does because a greeting is a social act with an
+order to it.** You do not wave at somebody before you have seen them, and you
+do not say whose desk you are on before you have said hello, so it goes after
+the eye contact and before the name. It also went into the only slack the
+sequence had: between the first blink and the nod there used to be a second
+and a bit where the creature had already noticed you and had not started
+talking yet, which is precisely the shape of a wave. The beat costs 1.6
+seconds and the sequence only got 0.65 seconds longer, because the `hello`
+hold at the end paid the other 0.2 and the old dead air paid the rest.
+
+**It does not touch the faces, and that is why it works on all three.** There
+is no arm anchor in the `Face` interface, and inventing one would mean editing
+rounded, arc and bear plus the header they share. The hand instead rises into
+the two text lines' band, which is the composition's own property and is empty
+at that moment: the name does not begin fading in until 200ms after the hand
+has gone. No face can tell the beat happened. The hand itself is six
+anti-aliased capsules (`drawWideLine`, the same primitive the arc face walks
+its ribbons with) rotated about a wrist point, because a hand that hinges at
+the wrist reads as waving and a hand that slides sideways reads as a windscreen
+wiper.
 
 The exact beats, easings and offsets are in the code. `renderFirstRun` is the
 specification and this prose is not.
@@ -38,7 +61,7 @@ specification and this prose is not.
 lines, and the accent colour has been easing toward `ambientAccent(nowMs)` since
 the nod. The 700ms `MODE_XFADE_MS` cross-fade at the end therefore has almost
 nothing left to change. The sequence also forces the anti burn-in drift to zero
-and holds `gXfade` at 1.0: 8.6 seconds cannot burn anything in, and a
+and holds `gXfade` at 1.0: 9.25 seconds cannot burn anything in, and a
 composition that wanders while it is introducing itself looks like it is sliding
 off the panel.
 
@@ -66,7 +89,7 @@ partition table: an image was flashed over an already-spent board and the
 sequence did not return, and the stored name survived too.
 
 **It is spent at the END of the sequence.** `spendFirstRun()` runs at the
-8600ms mark, not at the start, so a board unplugged halfway through is still
+9250ms mark, not at the start, so a board unplugged halfway through is still
 armed and its owner still gets the whole thing. The cost is that a board reset
 repeatedly mid-sequence keeps replaying, which is the correct failure direction.
 A replay never writes the flag at all, in either direction.
@@ -93,7 +116,7 @@ the stored name, so it is a wipe-and-show rather than a show).
 **When it is refused.** `{"firstrun":"play"}` does nothing while the effective
 state is `busy` or `waiting`, which is `safeToInterrupt()`. A turn that is
 actually running and a prompt that is actually pending are the two things this
-device exists to show, and hiding either behind an 8.6 second animation is the
+device exists to show, and hiding either behind a 9.25 second animation is the
 one thing it must never do. Ambient always qualifies as safe. On refusal the
 board says `err: firstrun refused, session is active` rather than silently doing
 nothing.
@@ -206,12 +229,20 @@ bring it back, a replay that did not spend, a replay refused mid-prompt, a bad
 enum value dropping the whole line, and `reset:"firstrun"` arming without
 clearing the name.
 
+It was driven again on board `44:1B:F6:D2:41:08` after the wave was added, and
+the wire proved the new length as a side effect: `firstrun: playing (first)`
+and `firstrun: spent` came out 9.273 seconds apart, which is the 9250ms mark
+plus the frame it lands on.
+
 The serial port cannot prove a single thing about whether the sequence is any
 good. Every visual claim about it is unticked in `docs/NEEDS-EYES.md`, which is
 the gate. The one test that matters is there: factory reset a board, unplug it,
 and plug it into a plain USB charger with no computer anywhere.
 
-Frame cost is not a concern here. The first run is the cheapest scene on the
-device, because it draws the same face through the same interface as ambient and
-draws no ring at all. Every composition holds the locked 30.3fps `FRAME_MS` cap;
-`FACES.md` part 6 has the measured table.
+Frame cost is still not a concern. The first run draws the same face through
+the same interface as ambient and draws no ring at all, and the wave adds six
+capsules and a string to 48 of its 280 frames. Measured on hardware with
+`-DFPS_DEBUG`, on all three faces, before and after: every window holds the
+locked 30.3fps `FRAME_MS` cap, and the worst frame in the whole sequence went
+from 17.20ms to 18.04ms against a 33ms budget. Both numbers are the arc face,
+which is the expensive one. `FACES.md` part 6 has the measured table.

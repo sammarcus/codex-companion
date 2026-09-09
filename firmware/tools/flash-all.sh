@@ -17,7 +17,7 @@
 #
 # Every board is RE-ARMED before it is called done. This is not optional and
 # it is not tidiness: flashing and verifying both power the board, each
-# power-on plays the 8.6 second out-of-the-box sequence, and the sequence
+# power-on plays the 9.25 second out-of-the-box sequence, and the sequence
 # spends its own NVS flag at the end of the last one. A run without this step
 # ships fourteen boards that have already had their first run, and the
 # recipient opens the box to the calm ambient face instead of a creature waking
@@ -142,7 +142,7 @@ PY
 # Everything above this point has powered the board at least twice: esptool
 # hard-resets it after upload, and verify_hello pulses DTR and RTS to read its
 # own boot. Each of those plays the sequence, and spendFirstRun() writes the
-# spent flag at the 8600ms mark, so by now the flag is set and the recipient's
+# spent flag at the 9250ms mark, so by now the flag is set and the recipient's
 # one moment is gone. {"reset":"firstrun"} removes it and touches nothing else:
 # not the owner name, not the face, not the records.
 #
@@ -287,7 +287,7 @@ done
 
 echo
 echo "All units $FIRST..$LAST flashed, verified and ARMED."
-echo "Armed means the next power-on plays the 8.6 second first run, once."
+echo "Armed means the next power-on plays the 9.25 second first run, once."
 echo "Anything that powers a board again before it is boxed spends it:"
 echo "  re-arm with  printf '{\"reset\":\"firstrun\"}\\n' > /dev/cu.usbmodemXXXX"
 echo "Check tools/fleet-log.tsv: only rows marked ok are shippable."

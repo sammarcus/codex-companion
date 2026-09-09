@@ -38,8 +38,9 @@
 //
 // The very first time an owner powers a board it plays an out-of-the-box
 // sequence instead of settling straight into ambient: dark, a light comes up
-// on a pair of shut eyes, they open, they find you, they blink, and it says
-// whose it is. It plays exactly once, the fact that it played is persisted in
+// on a pair of shut eyes, they open, they find you, they blink, a hand comes
+// up and waves "Hi OpenAI", and then it says whose it is. It plays exactly
+// once, the fact that it played is persisted in
 // NVS beside the name and the face, and re-flashing the same image does not
 // bring it back. Two optional protocol fields go with it, "reset" and
 // "firstrun", plus two button gestures. See firmware/FIRSTRUN.md.
@@ -773,8 +774,8 @@ static constexpr int MILE_TAG_Y = 148;   // middle datum
 // boot hold ends, which is also the instant the greeting goes out. See
 // firmware/FIRSTRUN.md for the beat-by-beat reasoning.
 //
-// The whole thing is 8.6 seconds on top of the 2 second boot hold, so the
-// object has done something worth watching inside the first eleven seconds
+// The whole thing is 9.25 seconds on top of the 2 second boot hold, so the
+// object has done something worth watching inside the first dozen seconds
 // out of the box and is in its resting look before anyone gets bored.
 // ---------------------------------------------------------------------------
 static constexpr uint32_t FR_T_CRACK  = 1400;   // lights up, then lids part
@@ -784,15 +785,44 @@ static constexpr uint32_t FR_T_WIDE   = 2300;   // fully open
 static constexpr uint32_t FR_T_LOOK   = 2700;   // has looked away
 static constexpr uint32_t FR_T_FIND   = 2950;   // snapped back to centre: you
 static constexpr uint32_t FR_T_BLINK  = 3400;   // the first blink
-static constexpr uint32_t FR_T_NOD    = 4600;   // a small nod, name fades in
-static constexpr uint32_t FR_T_HELLO  = 4800;   // "hello" fades in under it
-static constexpr uint32_t FR_T_SWAP   = 7000;   // "hello" -> the ambient line
-static constexpr uint32_t FR_T_END    = 8600;   // settle
+static constexpr uint32_t FR_T_GREET  = 3650;   // a hand comes up and waves
+static constexpr uint32_t FR_T_NOD    = 5450;   // a small nod, name fades in
+static constexpr uint32_t FR_T_HELLO  = 5650;   // "hello" fades in under it
+static constexpr uint32_t FR_T_SWAP   = 7650;   // "hello" -> the ambient line
+static constexpr uint32_t FR_T_END    = 9250;   // settle
 static constexpr uint32_t FR_FADE_MS  = 500;    // text fade in
 static constexpr uint32_t FR_SWAP_MS  = 350;    // half of the line-2 dissolve
 static constexpr uint32_t FR_NOD_MS   = 350;
 static constexpr float    FR_LOOK_AX  = -7.0f;  // px, where it looks first
 static constexpr float    FR_LOOK_AY  = 2.0f;
+
+// The greeting beat. The one thing on this device addressed to the room
+// rather than to its owner, and the reason it sits HERE: the sequence has
+// just made eye contact (FR_T_FIND) and blinked, and then had 1200ms of
+// nothing to do before it started talking. A wave is what that gap was
+// always shaped like. You do not wave at someone before you have seen them,
+// and you do not say whose desk you are on before you have said hello, so
+// the order is find you, wave at the room, then name the owner.
+//
+// It does NOT go at the end. The last second of the sequence is already the
+// ambient composition on purpose, so the handoff at FR_T_END is invisible;
+// a new thing appearing there is a new thing appearing after the object has
+// finished becoming its resting self.
+//
+// It also does not touch the face. There is no arm anchor in the Face
+// interface and adding one would mean editing all three faces, so the hand
+// rises into the empty two-line text band instead, which is composition
+// property. That is what makes this beat identical on rounded, arc and bear:
+// none of them can tell it happened.
+static constexpr uint32_t FR_GREET_MS  = 1600;  // rise, three sweeps, drop
+static constexpr uint32_t FR_GREET_IN  = 300;   // hand up and text in
+static constexpr uint32_t FR_GREET_OUT = 300;   // hand down and text out
+static constexpr float    FR_WAVE_DEG  = 23.0f; // tilt either side of upright
+static constexpr float    FR_WAVE_N    = 3.0f;  // full sweeps in the middle
+static constexpr int      FR_GREET_Y   = 138;   // middle datum, group centre
+static constexpr int      FR_GREET_GAP = 9;     // px between text and hand
+static constexpr int      FR_GREET_RISE = 46;   // px the hand travels up
+static constexpr const char* FR_GREET_TXT = "Hi OpenAI";
 
 // Blink. A human blink is asymmetric: the lid drops far faster than it lifts.
 // Equal ramps read as a mechanical shutter, so the close is 70ms and the open
@@ -1235,7 +1265,7 @@ static void spendFirstRun() {
 //
 // The flag a sequence ALREADY IN FLIGHT is holding has to be dropped too, or
 // this call is silently undone a few seconds later. tools/flash-all.sh arms
-// the instant verify_hello reads the greeting, which is t=0 of the 8.6 second
+// the instant verify_hello reads the greeting, which is t=0 of the 9.25 second
 // sequence that verify_hello's own DTR/RTS reset just started, and the end of
 // that sequence still runs `if (firstRunSpend) spendFirstRun()`. Measured on
 // the board: `reset: firstrun ok` at t+90ms, `firstrun: spent` at t+8.47s, and
@@ -1278,7 +1308,7 @@ static bool factoryReset() {
   gFaceIdx       = defaultFaceIndex();
   gFirstRunArmed = true;
   // Same hole as armFirstRun's, on the other door: a wipe that lands during a
-  // real first run was undone at the 8600ms mark by the spend the sequence was
+  // real first run was undone at the 9250ms mark by the spend the sequence was
   // still carrying. The button chord escapes this only by accident, because it
   // calls startFirstRun(nowMs, false) afterwards and that overwrites the flag.
   if (firstRunActive) firstRunSpend = false;
@@ -1341,8 +1371,8 @@ static void startFirstRun(uint32_t nowMs, bool spend) {
   sayForget();
   toyExit(nowMs, "firstrun");
   statsExit(nowMs, "firstrun");
-  // The timer's SCREEN steps aside; its clock does not. A replay is eight and
-  // a half seconds of theatre and a pomodoro is a commitment somebody made,
+  // The timer's SCREEN steps aside; its clock does not. A replay is nine and
+  // a quarter seconds of theatre and a pomodoro is a commitment somebody made,
   // and the second of those outranks the first.
   focusHide(nowMs, "firstrun");
 
@@ -3453,7 +3483,7 @@ static bool applyJsonLine(const char* line, size_t len) {
     touched = true;
   }
 
-  // Applied LAST, because it takes the screen for 8.6 seconds and everything
+  // Applied LAST, because it takes the screen for 9.25 seconds and everything
   // above should already be in place when it settles out of the sequence.
   //
   // A replay never touches the stored flag, so a script can rehearse on an
@@ -4146,6 +4176,143 @@ static float frSeg(uint32_t t, uint32_t a, uint32_t b) {
   return (float)(t - a) / (float)(b - a);
 }
 
+// ---------------------------------------------------------------------------
+// The hand.
+//
+// The device fonts are ASCII, so there is no waving-hand glyph to reach for
+// and there is no image loader to reach for either. It is six capsules and a
+// rotation: `drawWideLine` is LovyanGFX's anti-aliased wedge with round caps,
+// which is the same primitive FaceArc walks its ribbons with and FaceBear
+// draws its mouth with, so the edges match everything else on the panel and
+// it costs six calls a frame.
+//
+// Local coordinates are millimetres of nothing in particular: x right, y UP,
+// origin at the wrist, which is also the pivot. Rotating about the wrist is
+// what makes it a wave rather than a slide, because that is where a real hand
+// hinges. Resting extents are about 21px wide by 26 tall; the sweep takes it
+// to roughly 29px wide, which is the width the layout reserves.
+struct FrHandSeg { float x0, y0, x1, y1, w; };
+static const FrHandSeg FR_HAND[] = {
+  {  0.0f,  2.0f,   0.0f,  9.0f, 13.0f },  // palm, one fat capsule
+  { -5.0f,  4.0f, -11.5f,  9.0f,  4.5f },  // thumb, out to the left
+  { -4.5f, 10.0f,  -5.5f, 20.0f,  4.0f },  // index
+  { -1.5f, 11.0f,  -1.8f, 22.0f,  4.0f },  // middle, the tallest
+  {  1.5f, 11.0f,   1.8f, 21.0f,  4.0f },  // ring
+  {  4.5f, 10.0f,   5.5f, 18.5f,  4.0f },  // little
+};
+static constexpr int   FR_HAND_N    = (int)(sizeof(FR_HAND) / sizeof(FR_HAND[0]));
+// Width the layout reserves, and how far the pivot sits inside it from the
+// left. The hand is not symmetric about the wrist (the thumb only goes one
+// way) and the sweep is, so the slot is the union of both.
+static constexpr int   FR_HAND_W    = 30;
+static constexpr int   FR_HAND_PIVX = 17;
+// Rest extents above and below the wrist, used to centre the group on
+// FR_GREET_Y rather than eyeballing it.
+static constexpr float FR_HAND_UP   = 24.0f;
+static constexpr float FR_HAND_DOWN = 4.5f;
+
+// Draw the hand with its wrist at (px, py), rotated `deg` clockwise about
+// that wrist, in `color`. Nothing is cached: at six segments the trig is
+// cheaper than the state to avoid it.
+static void drawFrHand(float px, float py, float deg, uint16_t color) {
+  const float a = deg * (float)M_PI / 180.0f;
+  const float s = sinf(a), c = cosf(a);
+  for (int i = 0; i < FR_HAND_N; ++i) {
+    const FrHandSeg& g = FR_HAND[i];
+    // y is up in local space and down on the panel, hence the negated y.
+    float ax = px + (g.x0 * c + g.y0 * s);
+    float ay = py - (g.y0 * c - g.x0 * s);
+    float bx = px + (g.x1 * c + g.y1 * s);
+    float by = py - (g.y1 * c - g.x1 * s);
+    // drawWideLine's float argument is a RADIUS, and the table is in widths
+    // because that is how a finger is measured.
+    gfx->drawWideLine((int)lroundf(ax), (int)lroundf(ay),
+                      (int)lroundf(bx), (int)lroundf(by),
+                      g.w * 0.5f, color);
+  }
+}
+
+// The greeting beat: "Hi OpenAI" with a hand waving beside it.
+//
+// `t` is sequence time and `accent` is the face's colour this frame, which
+// the hand is painted in deliberately: it is the creature's own hand reaching
+// up from just off the panel, not a piece of chrome. The text stays white
+// like every other word this device says.
+//
+// The whole group is centred as one unit, so a different string or a
+// different font would still land centred without anything here being
+// retuned.
+static void renderFirstRunGreeting(uint32_t t, uint16_t accent) {
+  if (t < FR_T_GREET || t >= FR_T_GREET + FR_GREET_MS) return;
+  const uint32_t u = t - FR_T_GREET;
+
+  // Rise, wave, drop. The rise decelerates and the drop accelerates, so the
+  // hand arrives softly and leaves like it is being lowered rather than
+  // switched off. Alpha rides the same two ramps.
+  float lift = 1.0f, alpha = 1.0f;
+  if (u < FR_GREET_IN) {
+    float k = frSeg(u, 0, FR_GREET_IN);
+    lift  = sinf(k * (float)M_PI * 0.5f);
+    alpha = k;
+  } else if (u >= FR_GREET_MS - FR_GREET_OUT) {
+    float k = frSeg(u, FR_GREET_MS - FR_GREET_OUT, FR_GREET_MS);
+    lift  = 1.0f - k * k;
+    alpha = 1.0f - k;
+  }
+  if (alpha <= 0.0f) return;
+
+  // The sweep runs only in the middle, and starts and ends at exactly
+  // upright: sin is zero at both ends of a whole number of cycles, so the
+  // hand never snaps back to vertical when the beat hands over.
+  float deg = 0.0f;
+  if (u >= FR_GREET_IN && u < FR_GREET_MS - FR_GREET_OUT) {
+    float k = frSeg(u, FR_GREET_IN, FR_GREET_MS - FR_GREET_OUT);
+    deg = FR_WAVE_DEG * sinf(k * FR_WAVE_N * 2.0f * (float)M_PI);
+  }
+
+  gfx->setFont(&fonts::Font2);
+  gfx->setTextSize(1);
+  const int textW = gfx->textWidth(FR_GREET_TXT);
+  const int groupW = textW + FR_GREET_GAP + FR_HAND_W;
+  const int left   = SCREEN_W / 2 - groupW / 2;
+
+  gfx->setTextDatum(textdatum_t::middle_left);
+  gfx->setTextColor(scaleColor(C_TEXT, alpha * 0.88f), C_BG);
+  gfx->drawString(FR_GREET_TXT, left, FR_GREET_Y);
+
+  // Wrist y so the resting hand is centred on the same row as the text.
+  const float restY = (float)FR_GREET_Y + (FR_HAND_UP - FR_HAND_DOWN) * 0.5f;
+  drawFrHand((float)(left + textW + FR_GREET_GAP + FR_HAND_PIVX),
+             restY + (1.0f - lift) * (float)FR_GREET_RISE,
+             deg, scaleColor(accent, alpha));
+
+  // Font0 is what the caller draws its second line in, and setFont is
+  // sticky, so hand the state back the way it was found.
+  gfx->setTextDatum(textdatum_t::top_center);
+
+#ifdef FPS_DEBUG
+  // Nobody can see this screen from a serial port, so the debug build says
+  // where it put the group. Once per beat, on the frame the hand is upright
+  // and fully up, which is the frame the numbers describe. The extents are
+  // the SWEPT ones, not the resting ones: the check that matters is that the
+  // hand at full tilt still clears the panel edge and the face box above.
+  static bool said = false;
+  if (u < FR_GREET_IN) said = false;      // re-arms for the next replay
+  if (u >= FR_GREET_IN && !said) {
+    said = true;
+    Serial.printf("greet: textw=%d group=%d left=%d wrist=(%d,%d) "
+                  "sweep_x=%d..%d y=%d..%d\n",
+                  textW, groupW, left,
+                  left + textW + FR_GREET_GAP + FR_HAND_PIVX,
+                  (int)lroundf(restY),
+                  left + textW + FR_GREET_GAP + FR_HAND_PIVX - 17,
+                  left + textW + FR_GREET_GAP + FR_HAND_PIVX + 13,
+                  (int)lroundf(restY - FR_HAND_UP),
+                  (int)lroundf(restY + FR_HAND_DOWN));
+  }
+#endif
+}
+
 static void renderFirstRun(uint32_t nowMs, uint32_t dtMs) {
   (void)dtMs;
   const uint32_t t = nowMs - firstRunStartMs;
@@ -4244,6 +4411,14 @@ static void renderFirstRun(uint32_t nowMs, uint32_t dtMs) {
 
   FaceCanvas fc = faceCanvas();
   faceAt(gFaceIdx)->draw(fc, ff);
+
+  // --- the greeting -------------------------------------------------------
+  // Drawn over the face and under nothing, in the text band the two lines
+  // below have not reached yet: the greeting is finished at FR_T_GREET +
+  // FR_GREET_MS = 5250 and the name does not begin fading in until
+  // FR_T_NOD = 5450, so the two never share the panel and neither has to
+  // know about the other.
+  renderFirstRunGreeting(t, col);
 
   // --- the two lines ------------------------------------------------------
   // Line 1 is whatever ambient's line 1 will be, so it never moves or changes.
@@ -5191,8 +5366,8 @@ static void renderFrame(uint32_t nowMs) {
   gOx = (int)lroundf(AMB_DRIFT_AX * px * driftK);
   gOy = (int)lroundf(AMB_DRIFT_AY * py * driftK);
 
-  // The first run is 8.6 seconds and lands on the authored geometry, so it
-  // opts out of the burn-in drift entirely: 8.6 seconds cannot burn anything
+  // The first run is 9.25 seconds and lands on the authored geometry, so it
+  // opts out of the burn-in drift entirely: 9.25 seconds cannot burn anything
   // in, and a composition that wanders while it is introducing itself looks
   // like it is sliding off the panel. The cross-fade is likewise held settled,
   // because the sequence does its own fades.
@@ -5408,7 +5583,7 @@ static bool chordRelease(uint32_t nowMs) {
 }
 
 static void pumpButton(uint32_t nowMs) {
-  // The first run owns the device for its 8.6 seconds. Both gestures on this
+  // The first run owns the device for its 9.25 seconds. Both gestures on this
   // button start or restart it, and the brightness ladder is suspended anyway,
   // so there is nothing here that could do anything but interfere.
   if (firstRunActive) return;
