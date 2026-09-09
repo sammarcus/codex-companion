@@ -11,13 +11,9 @@ document:
 | device | `firmware/src/main.cpp` | the parser is `applyJsonLine`, fed by `pumpSerial` |
 | host | `helper/codex-companion.js` | **one file, zero dependencies.** There is no `helper/src/` directory |
 
-**Citation note, and a correction.** An earlier revision of this document
-cited `helper/src/frame.js` and `helper/src/device.js`. Neither file exists,
-and neither is coming back: the helper was rebuilt as a single dependency-free
-file, so the frame builder (`frameToLine`, `metricFields`, `frameForEvent`),
-the port picker (`choosePort`) and the transport (`class Link`) are all
-symbols inside `helper/codex-companion.js`. Every host-side citation below
-names one of those symbols.
+The frame builder (`frameToLine`, `metricFields`, `frameForEvent`), the port
+picker (`choosePort`) and the transport (`class Link`) are all symbols inside
+that one file.
 
 **Citations name symbols, not line numbers**, on both ends. Function,
 constant and field names survive edits that line numbers do not, so
@@ -161,10 +157,9 @@ struct State {
 };
 ```
 
-**Those defaults are almost never what you see, and this is a change from
-earlier revisions of this document.** The firmware now has an ambient mode,
-and the live view (the five states, the ring, the centre text) renders only
-while a host is actually talking to the board. `ambientActive` returns true
+**Those defaults are almost never what you see.** The device has an ambient
+mode, and the live view (the five states, the ring, the centre text) renders
+only while a host is actually talking to the board. `ambientActive` returns true
 whenever `hostEverSpoke` is false, so a board that has never received a single
 accepted line is in ambient mode from the end of the boot screen onward, and
 stays there indefinitely.
@@ -182,11 +177,8 @@ The stored `idle` / `CODEX` default is what the board falls back to the moment
 a host speaks and then says nothing further, not what an unattached board
 shows. `firmware/AMBIENT.md` is the full description of that mode.
 
-**An earlier revision of this document said the opposite**, that a unit with
-no host dims at 30s and reaches the 20/255 sleep look at 5 minutes. That was
-true of the pre-ambient firmware and is now wrong in both halves: an
-unattached board never enters the live view at all, and never reaches the
-sleep tier. `ST_SLEEP` is now reachable only when a host explicitly sends
+**An unattached board never enters the live view at all, and never reaches the
+sleep tier.** `ST_SLEEP` is reachable only when a host explicitly sends
 `{"state":"sleep"}`.
 
 ### 2.5 Staleness, once a host has spoken
@@ -198,7 +190,8 @@ which requires `hostEverSpoke`.
 | Elapsed since last accepted line | Behaviour | Symbols |
 |---|---|---|
 | under 30s (`STALE_DIM_MS`) | Render per the current struct. Backlight full unless the state tier says otherwise. | `updateBrightness` |
-| 30s to 5min | **Dim** to `70`/255 (`BRIGHT_DIM_IDX`, index 2 of `BRIGHT_LEVELS = {255,160,70,20}`). One content change rides along: `effectiveState` renders a stored `busy` or `waiting` as the **idle look**, so a dead host cannot leave a board pulsing red for an approval prompt that no longer exists. `sleep`, `idle` and `done` render unchanged, and `st.state` is untouched either way. | `effectiveState`, `updateBrightness` |
+| 30s to 5min | **Dim** to `70`/255 (`BRIGHT_DIM_IDX`, index 2 of `BRIGHT_LEVELS = {255,160,70,20,0}`; the `0` rung is only ever
+reached by hand, from button 2). One content change rides along: `effectiveState` renders a stored `busy` or `waiting` as the **idle look**, so a dead host cannot leave a board pulsing red for an approval prompt that no longer exists. `sleep`, `idle` and `done` render unchanged, and `st.state` is untouched either way. | `effectiveState`, `updateBrightness` |
 | 5min or more (`AMBIENT_AFTER_MS`, 300000) | **Back to ambient mode**, cross-faded over 700ms (`MODE_XFADE_MS`), then the ambient brightness rule takes over (full for 60s, then `70`). | `ambientActive`, `updateMode` |
 | a line arrives after either | The staleness tier clears on the next check and the live view resumes immediately. Coming back from ambient is a 700ms cross-fade that unwinds the burn-in drift to exactly zero, so the live layout lands on its authored geometry. | `updateMode`, `xf()` |
 
@@ -617,7 +610,7 @@ takes both switches, at opposite ends of the board, held together for 250ms
 and released before the five second factory reset), and any single press takes
 it down. The asymmetry is the entire safety argument, and it is the answer to
 the failure this repo already documented in
-`docs/prior-art-status-light.md`: a latched mode with no event that clears it.
+`docs/prior-art.md`: a latched mode with no event that clears it.
 
 ### 2.11 `play`: the toy
 
@@ -791,9 +784,9 @@ the focus timer's finish, in `renderFocus`'s `focusFin` branch.
 It takes the device's rule for modal screens, which is **button 2 leaves,
 button 1 is that screen's own action**: button 2 closes it, and button 1 goes
 *on* to the focus timer rather than closing (`statsExit` then `focusShow` in
-`pumpButton`). An earlier version of this section said any press takes it down,
-which sends somebody who presses button 1 to leave into a 25 minute pomodoro
-instead. It closes itself after twenty seconds, and a pending question closes
+`pumpButton`). "Any press takes it down" is wrong and would send somebody
+pressing button 1 to leave into a 25 minute pomodoro. It closes itself after
+twenty seconds, and a pending question closes
 it the way a question ends the toy rather than covering it the way one covers a
 message card.
 
@@ -1140,23 +1133,19 @@ puts on the wire. Notes:
   that order: a fresh rate-limit window at 80% or more takes the ring and the
   `QUOTA` label, otherwise a known context fill gives `CTX`, otherwise the
   ring parks at 0.15 and the label reads `TIME` with an elapsed clock or `--`
-  in the centre. An earlier revision of this document used an `"APPROVE"`
-  label in its `waiting` example and flagged it as aspirational. It is now
-  removed rather than flagged: the helper has no tool-name awareness and no
-  code path that could produce it. `firmware/tools/sim.py` does send `APPROVE`
-  and `DONE` as labels, which is fine for a simulator but means the simulator
-  does not show you exactly what the real helper shows.
+  in the centre. There is no `APPROVE` label: the helper has no tool-name
+  awareness and no code path that could produce one. `firmware/tools/sim.py`
+  does send `APPROVE` and `DONE` as labels, which is fine for a simulator but
+  means the simulator does not show you what the real helper shows.
 - **`waiting` always carries `sub: "your turn"`**, unconditionally, set in
   `frameForEvent` after the metric fields are merged. There is no tool name,
   no command, no file path. The screen says that you are the one holding
   things up; your terminal says what for.
 - **`waiting` comes from a hook event, not from a heuristic.** It is Codex's
-  own `PermissionRequest` event, mapped in `EVENT_STATE`. An earlier revision
-  of this document described a 45-second stall heuristic in a
-  `helper/src/codex-watcher.js` with a `--no-heuristic` flag. None of that
-  exists any more: there is no watcher module, no stall timer, and no such
-  flag. State is first-party hook data now, and the rollout file is read only
-  for numbers.
+  own `PermissionRequest` event, mapped in `EVENT_STATE`. There is no stall
+  timer and no watcher module: state is first-party hook data, and the rollout
+  file is read only for numbers. `docs/architecture.md` section 8 records the
+  45-second heuristic this replaced.
 - **`done` produces exactly one flash.** The firmware runs a 600ms flash
   (`DONE_FLASH_MS`): a 120ms ramp (`DONE_RISE_MS`), a decay, then a 150ms
   cross-fade into the idle look (`DONE_XFADE_MS`), after which it draws the

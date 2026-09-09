@@ -1,6 +1,14 @@
 # Codex CLI on-disk state format
 
-How a host helper can derive agent state and metrics by watching `~/.codex/`.
+How a host helper reads metrics out of `~/.codex/`, and why it cannot read
+*state* out of there.
+
+**What shipped, and what this document is for.** State comes from Codex's
+first-party hook events, not from disk. The rollout file is read for **numbers
+only**, which is what sections 3 to 6 are the reference for. The app-server
+control socket described here was fully mapped and then not used; the reasoning
+and the traps are in `docs/prior-art.md`, and `docs/architecture.md` section 6
+is the shipped design.
 
 **Version basis:** `codex-cli 0.153.4` (npm `@openai/codex@latest`, installed to an isolated
 prefix, see "Install situation"). Source read from `openai/codex` at commit
@@ -18,48 +26,28 @@ approval traffic. Those event shapes are documented from source and hand-assembl
 
 ## 0. Headline findings
 
-1. **Approval requests are NOT in the rollout JSONL.** `rollout/src/policy.rs` classifies
-   `EventMsg::ExecApprovalRequest` and `EventMsg::ApplyPatchApprovalRequest` as "Transient,
-   non-durable events" and returns `false` for them. A helper that only tails `~/.codex/sessions/`
-   **cannot** see "waiting for approval". This is the single most important constraint on the design.
-2. **There IS a programmatic approval channel.** The app-server exposes a Unix control socket and
-   sends server-to-client JSON-RPC approval requests. Details in section 7. Confirmed yes.
-3. **The app-server also exposes an explicit state machine** (`ThreadStatus` =
-   `notLoaded | idle | systemError | active{activeFlags:[waitingOnApproval|waitingOnUserInput]}`)
-   pushed as `thread/status/changed` notifications. That is exactly the busy/idle/waiting model,
-   already computed by Codex, and it is not derivable from disk.
-4. Rollout writes are **line-atomic for tailing**: every record is one
+1. **Approval requests are NOT in the rollout JSONL.** `rollout/src/policy.rs`
+   classifies `EventMsg::ExecApprovalRequest` and
+   `EventMsg::ApplyPatchApprovalRequest` as transient, non-durable events and
+   returns `false` for them. A helper that only tails `~/.codex/sessions/`
+   **cannot** see "waiting for approval". This is the single most important
+   constraint on the design, and it is why the state path is the hook system.
+2. **There is a programmatic approval channel**, the app-server's Unix control
+   socket, and it also exposes an explicit state machine (`ThreadStatus` =
+   `notLoaded | idle | systemError | active{activeFlags:[waitingOnApproval |
+   waitingOnUserInput]}`) pushed as `thread/status/changed`. Neither is
+   derivable from disk. Confirmed, mapped, and deliberately not used: see
+   `docs/prior-art.md`.
+3. Rollout writes are **line-atomic for tailing**: every record is one
    `write_all(json + "\n")` followed immediately by `flush()`
-   (`rollout/src/recorder.rs:1997-2001`). No partial lines under normal operation.
-5. Recent rollouts use `history_mode: "paginated"`, which changes which events are persisted.
-   The real capture confirms `"history_mode":"paginated"`.
+   (`rollout/src/recorder.rs:1997-2001`). No partial lines under normal
+   operation.
+4. Recent rollouts use `history_mode: "paginated"`, which changes which events
+   are persisted. The real capture confirms it.
 
----
-
-## 1. Install situation (read this before trusting any version claim)
-
-- `/opt/homebrew/bin/codex` is a Homebrew symlink to `../Cellar/codex/0.36.0/bin/codex`.
-  `brew list --versions codex` reports `codex 0.36.0`. The backgrounded brew upgrade exited 0 but
-  changed nothing; the formula is still 0.36.0.
-- `npm i -g @openai/codex@latest` **fails** with `EEXIST: /opt/homebrew/bin/codex` because npm's
-  global bin dir is `/opt/homebrew/bin` and the brew symlink already owns that name. It was NOT
-  forced, and the brew install was left untouched.
-- 0.153.4 was installed to an isolated prefix instead:
-  `npm i -g --prefix <scratch>/npm-prefix @openai/codex@latest`, giving
-  `<scratch>/npm-prefix/bin/codex` -> `codex-cli 0.153.4`. All 0.153.4 behavior below was produced
-  with that binary.
-- **The system `codex` on PATH is still 0.36.0.** A helper must not assume the on-PATH binary
-  matches the format described here. Read `session_meta.payload.cli_version` from the rollout
-  itself rather than shelling out to `codex --version`.
-
-The format gap matters. A 0.36.0 rollout looks like this (real, from
-`~/.codex/sessions/2025/09/16/...`):
-
-```json
-{"timestamp":"2025-09-16T19:49:09.591Z","type":"session_meta","payload":{"id":"38b1b318-65e0-465a-ad0c-9bebd99d1a93","timestamp":"2025-09-16T19:49:09.578Z","cwd":"/Users/sam","originator":"codex_cli_rs","cli_version":"0.36.0","instructions":null}}
-```
-
-No `ordinal`, no `session_id`, no `history_mode`, no `context_window`, no `source`.
+**Version basis:** `codex-cli 0.153.4`, source read from `openai/codex` at
+commit `121f91fd5d9dc66017866ce9bdc49f1e182721df` (2026-09-07), cloned to
+`vendor/codex`.
 
 ---
 
@@ -411,41 +399,17 @@ plus optional `plugin_id`, `script_path`, `environmentId`, `network_approval_con
 
 ---
 
-## 6. Recommended state-derivation rule
+## 6. Reading the numbers
 
-### If you can only read `~/.codex/sessions/` (disk-only)
+**State is not derived from here.** An earlier design tailed the rollout and
+inferred `BUSY` from an unmatched `task_started`, with a stall timeout standing
+in for "waiting". It cannot work: long model turns and long tool calls emit
+**nothing** to the JSONL, because `exec_command_begin/end`, `item_started` and
+all delta events are non-durable, so silence is not evidence of being stuck.
+And per finding 1 above, approvals never reach disk at all. Codex's
+`PermissionRequest` hook event replaced the whole heuristic.
 
-Watch the newest `rollout-*.jsonl` under `~/.codex/sessions/YYYY/MM/DD/`. Because every record is
-flushed on write, a naive line-tail is safe.
-
-Maintain per-file: `last_line_mtime`, `open_turn_id`, `last_event`.
-
-```
-state = DONE            # no rollout activity and no live process
-if last event is task_started            -> BUSY (turn_id = payload.turn_id)
-if last event is task_complete           -> IDLE if the process is still alive, else DONE
-if last event is turn_aborted            -> IDLE (reason in payload.reason)
-if last event is anything else AND an unmatched task_started precedes it -> BUSY
-if BUSY and now - last_line_mtime > STALL_S  -> UNKNOWN_STALLED
-```
-
-`STALL_S` should be generous (60-120 s). Long model turns and long tool calls emit **nothing** to
-the JSONL, because `exec_command_begin/end`, `item_started`, and all delta events are non-durable.
-Silence is not evidence of being stuck.
-
-**WAITING_FOR_APPROVAL is not derivable this way.** The honest disk-only mapping is:
-
-```
-BUSY + stalled + turn_context.approval_policy != "never"  ->  MAYBE_WAITING (heuristic only)
-```
-
-Label it a heuristic in the UI. Do not present it as a fact. With `approval_policy == "never"`
-(what `codex exec` uses by default, confirmed in the real capture) approvals cannot occur at all,
-so the heuristic can be suppressed entirely.
-
-Liveness: pair the rollout tail with a process check for a `codex` process whose open files include
-that rollout path, or simply whether the `codex exec` child you spawned has exited. `task_complete`
-means "this turn ended", not "the session ended". An interactive session goes back to IDLE.
+What the rollout is still good for is numbers.
 
 ### Metrics (disk-only)
 
@@ -465,8 +429,7 @@ means "this turn ended", not "the session ended". An interactive session goes ba
   `thread_token_usage`. `applyUsage` in `helper/codex-companion.js` keeps the two in separate
   fields for exactly this reason: `contextTokens` (fed from `last_token_usage` / `usage`) is what
   reaches `contextFill()` and the ring, `totalTokens` (fed from the cumulative figures) is
-  display-only accounting and never touches the ring. (There is no `helper/src/` directory and
-  no `codex-watcher.js`; an earlier revision of this document cited both.)
+  display-only accounting and never touches the ring.
 
   Codex's own formula is **not** `used/W`. From `TokenUsage::percent_of_context_window_remaining`
   (`protocol.rs:2428`) with `BASELINE_TOKENS = 12000` (`protocol.rs:2394`):
@@ -495,9 +458,7 @@ means "this turn ended", not "the session ended". An interactive session goes ba
   exactly `turn_id`, `last_agent_message`, `error`, `started_at`, `completed_at`, `duration_ms`
   and `time_to_first_token_ms`, and nothing else: `turn_token_usage` lives on
   `token_usage_record` (section 5), not here. The turn-delta logic lives in `applyEvent` in
-  `helper/codex-companion.js`. (An earlier revision of this document cited
-  `helper/src/codex-watcher.js` and a `_turnStartTokensOut` field. Neither the
-  file nor the symbol exists.)
+  `helper/codex-companion.js`.
   Label it derived. It is an average over the interval, not an instantaneous rate, and it excludes
   time spent in tool calls.
 
@@ -509,92 +470,22 @@ means "this turn ended", not "the session ended". An interactive session goes ba
 - **Rate limits.** Read the most recent `token_count.payload.rate_limits`. It only updates when a
   `token_count` event fires, so it can be stale between turns.
 
-### If you can reach the app-server (recommended)
+### The app-server, in one paragraph
 
-Do not derive the state machine. Ask for it. Subscribe to `thread/status/changed` and read
-`ThreadStatus` directly:
-
-| Codex `ThreadStatus` | Helper state |
-|---|---|
-| `{"type":"idle"}` | IDLE |
-| `{"type":"active","activeFlags":[]}` | BUSY |
-| `{"type":"active","activeFlags":["waitingOnApproval"]}` | WAITING_FOR_APPROVAL |
-| `{"type":"active","activeFlags":["waitingOnUserInput"]}` | WAITING_FOR_INPUT |
-| `{"type":"notLoaded"}` | DONE / not resident |
-| `{"type":"systemError"}` | ERROR |
-
-Plus `turn/started`, `turn/completed`, `thread/tokenUsage/updated` notifications, and the
-`item/*/requestApproval` server requests. This is strictly better than the disk heuristic and is
-the only correct way to get "waiting".
-
-**Suggested design:** app-server as the primary source, rollout tail as the fallback and as the
-durable audit trail. They agree on turn boundaries because both derive from the same `EventMsg`.
-
----
-
-## 7. Programmatic approval channel: CONFIRMED YES
-
-Three independent confirmations, all from the 0.153.4 binary or its source.
-
-**1. There is a Unix control socket.**
-`codex app-server --help` lists `proxy  Proxy stdio bytes to the running app-server control socket`.
-Path is built by `app_server_control_socket_path`
+Subscribing to `thread/status/changed` and reading `ThreadStatus` directly is
+strictly better than any disk heuristic, and it is the only correct way to get
+"waiting" from a channel other than the hooks. It was confirmed to exist on
+0.153.4: `codex app-server --help` lists a `proxy` subcommand, and the socket
+path is built by `app_server_control_socket_path`
 (`app-server-transport/src/transport/mod.rs:59-65`) as
-`$CODEX_HOME/app-server-control/app-server-control.sock`, from constants at `mod.rs:55-57`:
+`$CODEX_HOME/app-server-control/app-server-control.sock`. It was not used, and
+`docs/prior-art.md` carries the approval response shapes, the framing, the
+WebSocket-over-Unix-socket trap and the fork hazard on `thread/resume`, so none
+of that has to be rediscovered if it is ever wanted.
 
-```rust
-const APP_SERVER_CONTROL_SOCKET_DIR_NAME:  &str = "app-server-control";
-const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
-const APP_SERVER_STARTUP_LOCK_FILE_NAME:   &str = "app-server-startup.lock";
-```
-
-Transports supported: `AppServerTransport::{Stdio, UnixSocket{socket_path}, WebSocket{bind_address}, Off}`
-(`mod.rs:76-81`). `codex agents --remote <ADDR>` accepts `ws://`, `wss://`, `unix://`, `unix://PATH`.
-
-The daemon is managed with `codex app-server daemon {start,restart,stop,bootstrap,version,
-enable-remote-control,disable-remote-control}`. **The socket does not exist on this machine right
-now** (`~/.codex/app-server-control/` is absent), so an external process would need to start the
-daemon first.
-
-**2. Approval requests are server-to-client JSON-RPC requests you can answer.**
-From the `ServerRequest` table in `app-server-protocol/src/protocol/common.rs`:
-
-```
-item/commandExecution/requestApproval   (line 1728)
-item/fileChange/requestApproval         (line 1735)
-item/permissions/requestApproval        (line 1753)
-item/tool/requestUserInput              (line 1741)
-mcpServer/elicitation/request           (line 1747)
-```
-
-Plus the deprecated v1 pair, still live for legacy turn APIs (`common.rs:1785-1794`), whose wire
-method names are `applyPatchApproval` and `execCommandApproval` (asserted verbatim in the test at
-`common.rs:2869`). Their params (`v1.rs:139-178`) are `{conversationId, callId, approvalId?,
-command, cwd, reason, parsedCmd}` and `{conversationId, callId, fileChanges, reason, grantRoot}`;
-both responses are `{decision: ReviewDecision}`. **An external process that is the JSON-RPC client
-on that socket answers approvals by replying to these requests.** That is a real, supported
-approval channel, not a workaround.
-
-**3. State and metrics are also on that channel.** Relevant notifications
-(`common.rs:1881-1916`): `thread/started`, `thread/status/changed`, `thread/closed`,
-`turn/started`, `turn/completed`, `turn/diff/updated`, `turn/plan/updated`, `item/started`,
-`item/completed`, `thread/tokenUsage/updated`, `item/autoApprovalReview/started` and `/completed`.
-Relevant client requests: `thread/list`, `thread/loaded/list` ("Thread ids for sessions currently
-loaded in memory", `v2/thread.rs:1633`), `thread/read`, `thread/turns/list`, `thread/items/list`,
-`turn/start`, `turn/steer`, `turn/interrupt`, `account/rateLimits/read`, `account/usage/read`.
-
-`thread/loaded/list` + `thread/status/changed` is a complete answer to "which agents exist and what
-is each doing", with no file watching at all.
-
-**Other channels, for completeness:**
-- `codex mcp-server`: "Start Codex as an MCP server (stdio)". A separate, MCP-shaped surface.
-- `codex remote-control`: "[experimental] Manage the app-server daemon with remote control
-  enabled", with pairing (`remoteControl/pairing/start`, `remoteControl/client/list`).
-- `codex agents`: a TUI that browses "all agent sessions on the shared local app-server daemon".
-  Proof that cross-process session enumeration is an intended, first-class capability.
-- **The sqlite db is NOT such a channel.** `~/.codex/sqlite/codex-dev.db` contains only
-  `inbox_items`, `automations`, `automation_runs`, which is desktop-app automation scheduling. No approval
-  queue, no session state.
+The sqlite databases under `~/.codex/` are **not** such a channel:
+`codex-dev.db` holds only `inbox_items`, `automations` and `automation_runs`,
+which is desktop-app scheduling. No approval queue, no session state.
 
 ---
 
@@ -602,70 +493,30 @@ is each doing", with no file watching at all.
 
 | File | Provenance |
 |---|---|
-| `helper/test/fixtures/session-sample.jsonl` | **Real.** Captured 2026-09-07 with codex-cli 0.153.4. 9 lines, 67 KB. Copied verbatim from `~/.codex/sessions/2026/09/07/rollout-2026-09-07T06-20-00-01a07a18-2f55-78c3-9976-e71905ebb698.jsonl`. Line kinds in order: `session_meta`, `task_started`, `response_item`(message), `response_item`(message), `world_state`, `turn_context`, `response_item`(message), `item_completed`(UserMessage), `task_complete`(with error). |
-| `helper/test/fixtures/session-sample-synthetic.jsonl` | **Synthetic, hand-assembled from source.** First line is a `_SYNTHETIC_NOTE` marker. Covers `token_usage_record`, `token_count` (with rate limits), `item_completed`(AgentMessage), a successful `task_complete` with `last_agent_message`, `turn_aborted`, and the two approval payloads (each preceded by a note that they are never written to the rollout). Field names and types are verified against the structs; **values are invented**. |
+| `helper/test/fixtures/session-sample.jsonl` | **Real.** Captured 2026-09-07 with codex-cli 0.153.4. 9 lines, 67 KB, verbatim from a real rollout. Line kinds in order: `session_meta`, `task_started`, `response_item`(message) x2, `world_state`, `turn_context`, `response_item`(message), `item_completed`(UserMessage), `task_complete`(with error) |
+| `helper/test/fixtures/session-sample-synthetic.jsonl` | **Synthetic, hand-assembled from source.** First line is a `_SYNTHETIC_NOTE` marker. Covers `token_usage_record`, `token_count` (with rate limits), `item_completed`(AgentMessage), a successful `task_complete`, `turn_aborted`, and the two approval payloads (each preceded by a note that they are never written to the rollout). Field names and types are verified against the structs; **values are invented** |
 
-Why the real capture is thin: `codex exec` failed with
-`Your access token could not be refreshed because your refresh token was already used. Please log
-out and sign in again.` (HTTP 401 on `wss://chatgpt.com/backend-api/codex/responses`). No
-re-authentication was attempted. The `--json` stdout stream for that run was:
+The real capture is thin because the turn failed on expired auth (HTTP 401 on
+the responses endpoint) before any model output or token accounting. That is
+also the whole of open question L1.
 
-```json
-{"type":"thread.started","thread_id":"01a07a18-2f55-78c3-9976-e71905ebb698"}
-{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-5-codex` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
-{"type":"turn.started"}
-{"type":"error","message":"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again."}
-{"type":"turn.failed","error":{"message":"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again."}}
-```
-
-Worth noting on its own: **`codex exec --json` on stdout is a fourth viable channel** if the helper
-is the one spawning Codex. It is dot-cased (`thread.started`, `turn.started`, `item.completed`,
-`turn.failed`) and does **not** share the rollout's snake_case tags. Do not write one parser for both.
+**One thing worth knowing from that run: `codex exec --json` on stdout is a
+fourth viable channel** if the helper is the one spawning Codex. It is dot-cased
+(`thread.started`, `turn.started`, `item.completed`, `turn.failed`) and does
+**not** share the rollout's snake_case tags. Do not write one parser for both.
 
 ---
 
-## 9. UNCONFIRMED
+## 9. What is still unconfirmed
 
-Everything here is either untested on this machine or inferred. None of it should be treated as fact.
-
-1. **`token_count` and `token_usage_record` have never been observed on disk here.** The turn died
-   on auth before any usage was reported. Their shapes come from struct definitions plus
-   `core/tests/suite/token_usage_rollout.rs`. Field names are high confidence; exact null-vs-omitted
-   behavior for `rate_limits` sub-objects is UNCONFIRMED.
-2. **Rate-limit values have never been observed.** No `RateLimitSnapshot` has been seen from a live
-   account. Whether `primary` is the 5-hour and `secondary` the weekly window is an assumption from
-   field ordering, not verified.
-3. **Approval events have never been observed**, on disk or on the wire. The claim that they never
-   reach the JSONL is confirmed from `rollout/src/policy.rs` (strong, it is an exhaustive match) but
-   was not confirmed empirically, because no turn ever ran.
-4. **The app-server control socket has never been opened.** `~/.codex/app-server-control/` does not
-   exist on this machine. The daemon was not started. Socket path, JSON-RPC framing, handshake, and
-   whether an unprivileged external process can attach are all UNCONFIRMED in practice.
-5. **`ThreadStatus` / `ThreadActiveFlag` have never been observed on the wire.** Read from
-   `app-server-protocol/src/protocol/v2/thread.rs:1645-1662`.
-6. **The exact v2 approval request/response params were not read**: only the method names
-   (`item/commandExecution/requestApproval` etc.) and the deprecated v1 param structs. The v2
-   payload shapes are UNCONFIRMED.
-7. **Behavior in `legacy` history mode is untested.** Only a `paginated` session was captured. The
-   legacy/paginated split in section 4 is from source only.
-8. **Multi-turn and compaction behavior is untested.** No `compacted` line, no second turn, no
-   `turn_context` change mid-session was observed at 0.153.4. Whether `ordinal` is strictly
-   contiguous across compaction or revert is UNCONFIRMED.
-9. **Sub-agent / multi-agent rollouts are untested.** `agent_nickname`, `agent_role`, `agent_path`,
-   `parent_thread_id`, `subagent_history_start_ordinal`, and the reverted-thread filename form
-   `rollout-<ts>-<thread_id>_<rollout_id>.jsonl` were never seen on disk.
-10. **`--ephemeral` was not tested.** The claim that it writes no rollout file comes from the flag's
-    help text ("Run without persisting session files to disk").
-11. **Tail-safety under concurrent readers is untested.** The flush-per-line claim is from
-    `rollout/src/recorder.rs:1997-2001`; no concurrent-read race test was run.
-12. **`model_context_window: 258400`** was observed once, for `gpt-5-codex`, in a run that also
-    warned "Model metadata for `gpt-5-codex` not found. Defaulting to fallback metadata." That value
-    may be a fallback default rather than the model's true window.
-13. **Version drift risk.** The clone is HEAD-of-main from 2026-09-07, which is not necessarily the
-    exact source of the published 0.153.4 npm build. Field-level drift between the two is possible.
-14. **`brew upgrade codex` was never verified as having been offered a newer version.** The log
-    contained only `codex exit 0`; whether Homebrew simply has a stale formula or the upgrade
-    silently failed was not determined.
+Every open item from this document, with the command that settles it, is in
+`docs/open-questions.md` (rows L1, L2, L7 to L14). The two that matter: the
+`token_count` and `token_usage_record` line shapes have **never been observed on
+disk here**, because the one real capture died on expired auth before any usage
+was reported, and their shapes come from struct definitions plus
+`core/tests/suite/token_usage_rollout.rs`. And `model_context_window: 258400`
+was seen once, in a run that also warned about missing model metadata, so it may
+be a fallback default rather than the model's real window.
 
 ---
 

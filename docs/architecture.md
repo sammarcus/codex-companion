@@ -2,12 +2,6 @@
 
 How the whole thing fits together, and why each piece is shaped the way it is.
 
-The most useful half of this document is the last section, **Decisions that
-were reversed**. This project changed its own architecture twice in one day and
-then rebuilt its interaction model three times. If you are reading this months
-later and wondering why something obvious is not here, the answer is usually
-that it was here, and it was taken out for a reason worth knowing.
-
 Every claim below was checked against the code it describes. Citations name
 symbols rather than line numbers, because `grep -n applyJsonLine
 firmware/src/main.cpp` still works after an edit.
@@ -279,7 +273,7 @@ cleared by whatever happens next: `PreToolUse`, `PostToolUse` or `Stop`. If the
 owner walks away instead, nothing at all happens next, and the device's own
 staleness timers are the only thing that recovers it. That is why those timers
 exist in the form they do, and it is a lesson taken directly from prior art:
-`docs/prior-art-status-light.md` documents a hooks port that latches amber with
+`docs/prior-art.md` records a hooks port that latches amber with
 no event to clear it, so a resolved-then-quiet session stays amber forever.
 
 ### It can never approve or deny. Two independent reasons.
@@ -435,236 +429,31 @@ shared driver as the creature on the desk.
 
 ## 8. Decisions that were reversed
 
-This is the part worth reading.
+This project changed its own architecture twice in one day and then rebuilt its
+interaction model three times. If you are reading this months later and
+wondering why something obvious is not here, the answer is usually that it was
+here and was taken out.
 
-### Reversal 1: the helper was an installed npm package with a background service
-
-**Was:** a multi-file npm package (`helper/src/codex-watcher.js`,
-`frame.js`, `device.js`, `install.js`, `helper/bin/`, `helper/index.js`), a
-`serialport` dependency pulling in nineteen transitive packages and a native
-binding, a `.tgz` tarball, and an `install` subcommand that wrote a launchd
-LaunchAgent on macOS, a `systemd --user` unit on Linux and printed manual
-instructions on Windows. It installed itself to `~/.codex-companion/app` and
-survived reboots.
-
-**Is:** one file, `helper/codex-companion.js`, four Node built-ins, no
-dependencies, no lockfile, no build step, no autostart on any platform, and a
-foreground process that Ctrl-C ends completely.
-
-**Why.** The recipients are employees who may not be allowed to run a
-stranger's program on a work machine. Every line of that install story was a
-reason to say no, and none of it was buying anything the owner wanted: they
-wanted a light on their desk. A single file is auditable in one sitting, which
-is what makes the claims on the printed card checkable rather than trusted.
-`helper/README.md` is written as a list of greps for exactly that reason.
-
-The side effect that matters: with no dependencies there is no supply chain, and
-with no autostart there is nothing to uninstall. "Unplug the board" is a
-complete uninstall.
-
-### Reversal 2: `waiting` was a 45-second silence heuristic
-
-**Was:** the helper tailed the rollout file and inferred that a prompt was
-pending when an open turn had been silent for 45 seconds and `approval_policy`
-was known and not `"never"`. It was togglable with `--no-heuristic`, which is
-the tell: a signal you ship an off switch for is a signal you do not believe.
-
-**Is:** Codex's own `PermissionRequest` hook event. The rollout file is read
-only for numbers.
-
-**Why.** `waiting` is the hero state, the entire reason the object exists. An
-inference with a 45-second lag that fires on a slow tool call and misses a fast
-approval is not a signal, it is a guess wearing a signal's clothes. Approval
-events are essentially never persisted to disk by Codex, so the disk could
-never have carried this. When the first-party hook system turned out to exist,
-the heuristic was not improved, it was deleted.
-
-The general lesson, and it is the one this project would most want repeated:
-**when a first-party event exists, an inference built on side effects is not a
-fallback, it is a liability.** It fails in ways nobody can debug from a desk.
-
-### Reversal 3: units were built individually
-
-**Was:** `tools/units.txt`, a `NAMES_FILE` override, `-DUNIT_ID=<n>` and
-`-DUNIT_NAME` baked in per board, and a flasher that force-removed `main.cpp.o`
-between units so a build could not reuse the previous unit's `UNIT_ID`.
-
-**Is:** one byte-identical image for the whole fleet. Units derive their label
-from the last two bytes of the chip's efuse MAC (`UNIT AB12`). Owner names are
-set afterwards over the wire and stored in NVS.
-
-**Why.** Fourteen images means fourteen hashes, fourteen chances to flash the
-wrong one, and a class of mistake (Alex's board with Jordan's name on it) that
-is invisible until somebody opens a box. It also meant the recipients' names
-had to be known at flash time, which they were not. One image means unit 1 is
-the only real build and every later unit costs upload time only, and it means a
-recipient can dump their board and check it against a hash anyone can
-reproduce.
-
-Note the detail in the MAC label: it has to be the **last** two bytes. The
-first three are the Espressif OUI and are identical across the batch, so a
-suffix from that end would print the same digits on all fourteen boards. And
-`UNIT 00` was deliberately avoided, because it reads like a real serial number.
-
-### Reversal 4: five minutes of silence used to force `sleep`
-
-**Was:** the device dropped to `ST_SLEEP` after five minutes with no data:
-backlight duty 20, a nearly black screen.
-
-**Is:** it returns to ambient mode. `sleep` is reachable only when a host
-explicitly sends `{"state":"sleep"}`.
-
-**Why.** This is law 1 arriving late and taking something out. On a desk with
-no host software installed, which is what most of these units will be, the old
-behaviour meant the object was permanently dark. The staleness clock is seeded
-at boot, so a unit that had never received a single line followed the same
-schedule as one whose host went away: dim at 30 seconds, dark at five minutes.
-A tray of freshly flashed boards going dark on the bench looked exactly like a
-tray of dead boards.
-
-### Reversal 5: ambient drew a comet ring, and there was no face
-
-**Was:** the whole UI was a ring. Ambient drew a comet: a faint full-ring track
-plus five arc segments totalling 76 degrees, each 19% dimmer than the one ahead,
-lapping every 24 seconds.
-
-**Is:** ambient draws a face and no ring. The ring belongs to live mode, where
-it carries real numbers.
-
-**Why.** `docs/design-spec.md` section 1.5 had already noticed the problem: the
-reference desk pets carry state in *pose*, and recolouring a whole ring per
-state was this project's substitute "because a ring has no pose/expression
-channel to lean on". A face gives that channel back, so colour becomes one of
-five signals instead of the only one, which is what lets `waiting` shout and
-`sleep` whisper.
-
-The practical argument was simpler. A small glowing ring on a desk that already
-has a monitor, a keyboard and a plant is furniture. Eye contact is the one image
-a human reads across a room without deciding to.
-
-The two could not coexist: the face is 148px wide and the comet was 104px
-across in the same place, shrinking either to fit made both worse, and a ring
-drawn around a face is a bullseye rather than a portrait. Ambient also got
-1.2ms *faster*, because two anti-aliased rounded rects are cheaper than six
-`fillArc` calls.
-
-### Reversal 6: the ring UI was specified with seven states
-
-`docs/design-spec.md` part 2 specifies `boot`, `sleep`, `idle`, `busy`,
-`attention`, `celebrate`, `error`, adapted from the reference project's own
-seven-state enum. The shipped protocol has five, and `attention` became
-`waiting`.
-
-The palette from part 2 survived verbatim (all eight colours round-trip to the
-RGB565 constants in `main.cpp`), plus one ambient-only teal that part 2 has no
-state for, because part 2 had no concept of "no host attached". The animation
-timing was kept for `sleep` and the pre-escalation `waiting` pulse and
-deliberately diverged for two: `busy` breathes on part 2's 2400ms idle period
-instead of running its 1000ms linear spinner, and `idle` is a low-amplitude
-brightness breathe rather than a rotating arc sweep. Law 4 is the reason both
-times: a spinner in the corner of somebody's eye all afternoon is the thing
-that gets a device unplugged.
-
-The spec was kept and marked as diverged rather than rewritten to match, which
-is why `firmware/README.md` opens by saying which parts it borrows and which it
-does not.
-
-### Reversal 7: button 1's tap was a brightness cycle, and its hold replayed the first run
-
-Both were spent, one at a time, and the accounting was written down each time
-because a two-button device runs out of gestures fast.
-
-**The tap.** Brightness had two controls: button 2 with no special cases, and
-button 1 with a wake-first case in front. The stated reason for keeping the
-second copy was a unit whose GPIO 14 switch might be unreachable in a case. The
-stats screen spent that. Three things kept the trade honest: opening the screen
-still wakes a dimmed panel exactly as an acknowledgement does, the brightness
-fallback survives in the one case the numbers cannot be shown (a pending
-prompt, where `statsEnter` refuses), and brightness is at most two presses away
-from anywhere, because button 2 leaves every modal screen and then steps the
-brightness. That last clause used to read "at most one press away from anywhere
-because any press takes down whatever is on top", which was the old rule
-Reversal 8 replaces two sections down: under the rule that actually shipped,
-button 1 opens the timer from the stats screen, hops on the toy and is the run
-control on the timer, so three of the six modal screens cost the extra press.
-
-**The hold.** Button 1's two second hold used to replay the out-of-the-box
-sequence. The game took it. That was the weakest binding on the board: every
-owner is shown the first run once automatically and it keeps two other doors
-(`{"firstrun":"play"}`, and the factory reset which replays it to confirm
-itself), while the game is a thing somebody reaches for every time a turn runs
-long.
-
-The scheme those two reversals landed on, which is the one to measure the next
-feature against:
-
-| | button 1 (GPIO 0) | button 2 (GPIO 14) | both |
+| Cut | What it was | Why it went | Cost to restore |
 |---|---|---|---|
-| tap | acknowledge a prompt, else the stats screen | brightness | do not disturb |
-| hold | 2s: the toy | 800ms: next face | 5s: factory reset |
+| **The installed npm package** | a multi-file helper with a `serialport` dependency, 19 transitive packages and a native binding, shipped as a `.tgz`, with an `install` subcommand writing a launchd agent or a systemd unit | recipients are employees who may not be allowed to run a stranger's program on a work laptop. Every line of that install story was a reason to say no, and none of it bought anything the owner wanted | high, and it should not come back. "Unplug the board" is a complete uninstall now |
+| **The 45 second stall heuristic for `waiting`** | inferred a pending prompt from an open turn going quiet, with a `--no-heuristic` off switch | the off switch was the tell: a signal you ship an off switch for is a signal you do not believe. Codex has a first-party `PermissionRequest` hook event | nothing to restore. The first-party event is strictly better |
+| **Per-unit builds** | `tools/units.txt`, `-DUNIT_ID` and `-DUNIT_NAME` baked in, a flasher that force-removed `main.cpp.o` between units | fourteen images means fourteen hashes and a class of mistake (Alex's board with Jordan's name on it) that is invisible until somebody opens a box | the flags still work. `UNIT_BUILD_FLAGS='-DUNIT_ID=3' ./tools/flash-all.sh` compiles per unit, and that unit gets its own hash. Law 3 is the reason not to |
+| **Five minutes of silence forcing `sleep`** | the device went to backlight duty 20 and a near-black screen | law 1 arriving late. On a desk with no host software, which is most of these units, the object was permanently dark, and a tray of flashed boards looked like a tray of dead ones | `{"state":"sleep"}` still reaches that look on demand. Only the automatic path is gone |
+| **The ambient comet ring** | a faint full-ring track plus five arc segments totalling 76 degrees, lapping every 24 seconds | a small glowing ring on a desk that already has a monitor and a plant is furniture. Eye contact is the one image a human reads across a room without deciding to, and the two could not coexist at 148px and 104px in the same place | the code is gone. Ambient got 1.2ms faster losing it |
+| **`error` and `celebrate` as protocol states** | `docs/design-spec.md` part 2 specifies seven states | the shipped protocol has five. `attention` became `waiting`, `done` got a 600ms flash instead of a celebrate sequence, and `error` was never implemented | `error` is the one genuinely open re-addition. It needs a hue no state owns, and violet and teal are both spoken for |
+| **Button 1's brightness cycle** | brightness had two controls, button 1 with a wake-first case and button 2 without | the stats screen spent it. Brightness is button 2 alone now, at most two presses from anywhere, and opening the stats screen still wakes a dimmed panel | `docs/NEEDS-EYES.md` asks whether losing it is missed. Live with it for an afternoon before deciding |
+| **Button 1's hold replaying the first run** | a two second hold replayed the out-of-the-box sequence | the game took it. That was the weakest binding on the board: every owner sees the first run once automatically, and it kept two other doors | both doors are still open: `{"firstrun":"play"}`, and the factory reset, which replays it to confirm itself |
+| **The cross-cutting modal rule** | "any press takes down whatever is on top, except the toy" | two exceptions would not be a rule. It was replaced rather than exempted from: **button 2 leaves, button 1 is that screen's own action, and where a screen has no action it leaves too** | not a restoration question. The new rule is one sentence and covers all six screens |
+| **The game's first physics constants** | a 30px hit box against 0.41s of jump clearance | it lost the clearance race at every speed. A bot playing over the cable, jumping on the exact frame, died on the first block every time. The shipped numbers give about 1.6x margin at the starting speed | the arithmetic is in `firmware/README.md`: an obstacle sits in the hit box for `(2*hitHalf + w)/speed`, and the jump must beat that **at the slowest speed**, because a slower obstacle sits there longer |
+| **A per-unit npm install line on the printed card** | `npm install -g ./codex-companion-1.0.0.tgz`, and a QR encoding an install command | a QR that pastes a command into a coworker's terminal is a worse idea than one that opens a page they can read first | the card encodes a URL now, and `make-qr.sh` refuses to render while that URL is a placeholder |
+| **The `arc` face drawn the way its reference draws it** | one filled polygon per stroke, walked as 88 anti-aliased wedges | 24ms a frame against a 33ms budget that already spends 14ms on `fillScreen` and `pushSprite`. Stamping filled discs along the ribbon costs 3ms for the same picture | the general form is worth keeping: on this hardware anti-aliased primitives are per-pixel float work over their own bounding box, and the cheap-looking call is often the expensive one |
 
-Four thresholds, same as before either change. Button 1 is "tell me something";
-button 2 is the panel controls.
-
-### Reversal 8: the cross-cutting modal rule was replaced rather than exempted from
-
-**Was:** "while anything modal is on the panel, a press takes it down and does
-nothing else, with the game as the single exception, because it is played
-rather than read."
-
-**Is:** "on any modal screen, button 2 leaves; button 1 is that screen's own
-action, and where a screen has no action, it leaves too."
-
-**Why.** The focus timer would have been a second exception, and two exceptions
-are not a rule. The replacement covers every screen the device has and is
-strictly simpler to say out loud than the old rule plus its exception. It is
-worth noticing that the fix was to restate the rule, not to bolt on another
-special case; the old one had already survived one exception and would not have
-survived two.
-
-### Reversal 9: the game's first physics constants were unwinnable
-
-The first set had a 30px hit box against 0.41 seconds of clearance and lost the
-race at every speed. A bot playing over the cable, jumping on the exact frame,
-died on the first block every time and scored zero in ninety seconds.
-
-The non-obvious part, and the reason it was got wrong: an obstacle sits inside
-the hit box for `(2 * TOY_HIT_HALF + w) / speed` seconds, so a **slower**
-obstacle sits in the hit box **longer**. The jump has to beat the hit window at
-the slowest speed, not the fastest. Going faster makes this game easier to
-clear and harder to react to, which is the classic's difficulty curve and the
-opposite of the intuition. The shipped numbers give about 1.6x margin at the
-starting speed.
-
-There is a second, smaller reversal inside the same feature: coming back out
-from under a message card, the runner reappeared with a block already touching
-it and died for something nobody could have seen. Resuming now clears the
-stretch and keeps the score. That was measured on the bench, not hypothesised.
-
-### Reversal 10: the printed card sold an npm install, then a tarball, then nothing
-
-Early drafts of `docs/card.md` printed `npm install -g
-./codex-companion-1.0.0.tgz` and apologised at length for an unpublished
-package name. The QR encoded an npm or npx install line.
-
-Both are gone. There is no tarball, no registry entry and no package install on
-the card, and the QR encodes a **URL to a page a person can read first** rather
-than a command that pastes itself into somebody's terminal. `docs/make-qr.sh`
-refuses to render while the URL is a placeholder, on purpose: a QR that
-resolves to nothing is the one error you cannot spot on a printed card.
-
-### Reversal 11: the `arc` face was drawn the way its reference draws it
-
-The reference fills one polygon per stroke. There is no polygon primitive here,
-so the first attempt drew 88 anti-aliased wedges: 24ms a frame against a 33ms
-budget that already spends 14ms on `fillScreen` plus `pushSprite`. The shipped
-version walks the ribbon and stamps a filled disc of the local half width at
-each sample, taking the union: round caps and joins for free, no seam, and 3ms.
-
-Kept here because the general form recurs: on this hardware, **anti-aliased
-primitives are per-pixel float work over their own bounding box**, and the
-cheap-looking call is often the expensive one. Measure with `-DFPS_DEBUG`
-before assuming.
+**What would be worth adding next**, and neither needs a gesture: an `error`
+state, which is the one thing design-spec specified and this device does not
+have; and a `tokens`-driven weekly figure on the stats screen, since the device
+already banks differences and already has a midnight. The button model is full,
+so anything that wants a gesture has to displace something and write down what.
 
 ---
 
@@ -702,7 +491,7 @@ Honest gaps, because a document that only lists what works is not useful.
 | the out-of-the-box sequence | `firmware/FIRSTRUN.md` |
 | what Codex writes to `~/.codex/` | `docs/codex-state-format.md` |
 | the design the palette came from | `docs/design-spec.md` |
-| what other people built, and what they got wrong | `docs/prior-art-*.md` |
+| what other people built, and what they got wrong | `docs/prior-art.md` |
 | what is still unchecked | `docs/open-questions.md`, `docs/NEEDS-EYES.md` |
 | flash day | `docs/wednesday-runbook.md` |
 | third-party licences | `docs/licences.md` |

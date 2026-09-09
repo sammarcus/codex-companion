@@ -80,10 +80,9 @@ File: `T-Display-S3/examples/T-Display-S3-Queue/ST7789_Handler.h:58-67` (byte-id
 **Reconciling the two:** the IDF path uses `swap_xy(true)` + `set_gap(x=0, y=35)` in the panel's native (portrait, memory) coordinate frame before rotation; the LovyanGFX path expresses the same physical offset as `offset_x=35` (its landscape frame after `offset_rotation=1`) with `panel_width/height` already declared as the rotated 170x320. Both encode "35px offset on the long axis, 0 on the short axis" for this panel. `offset_x` in the LovyanGFX cfg is not the same axis as IDF's `set_gap` x-arg; do not port one value to the other's field name without accounting for the axis swap.
 
 ### 2c. `examples/tft/tft.ino` (TFT_eSPI path)
-Only sets rotation, no explicit gap/offset call in the `.ino` itself: offsets for this board are baked into the TFT_eSPI User_Setup (section 5) via `CGRAM_OFFSET` + driver-level ST7789 rotation tables, not a runtime gap call:
-```
-tft.setRotation(3);   // T-Display-S3/examples/tft/tft.ino:64
-```
+Only sets rotation (`tft.setRotation(3)`, `:64`), no runtime gap call. Offsets in
+that path are baked into the TFT_eSPI User_Setup via `CGRAM_OFFSET` and the
+driver's ST7789 rotation tables. Not the path this firmware takes.
 
 ---
 
@@ -213,27 +212,17 @@ No `dummy_read_pixel`/`dummy_read_bits` override in this example: takes the `Pan
 
 ---
 
-## 5. TFT_eSPI setup for this board: `T-Display-S3/lib/TFT_eSPI/User_Setups/Setup206_LilyGo_T_Display_S3.h`
+## 5. TFT_eSPI setup, for cross-checking only
 
-Full file (48 lines):
-```
-USER_SETUP_ID 206                          (:3)
-USE_HSPI_PORT                              (:5)
-ST7789_DRIVER                              (:6)
-INIT_SEQUENCE_3                            (:7)
-CGRAM_OFFSET                               (:9)
-TFT_RGB_ORDER TFT_RGB                      (:10)
-TFT_INVERSION_ON                           (:13)
-TFT_PARALLEL_8_BIT                         (:16)
-TFT_WIDTH  170                             (:18)
-TFT_HEIGHT 320                             (:19)
-TFT_CS  6      TFT_DC  7      TFT_RST 5    (:21-23)
-TFT_WR  8      TFT_RD  9                   (:25-26)
-TFT_D0 39  TFT_D1 40  TFT_D2 41  TFT_D3 42
-TFT_D4 45  TFT_D5 46  TFT_D6 47  TFT_D7 48 (:28-35)
-TFT_BL 38  TFT_BACKLIGHT_ON HIGH           (:37-38)
-```
-Matches `pin_config.h` (section 1) pin-for-pin. `CGRAM_OFFSET` (`:9`) is TFT_eSPI's mechanism for baking in the panel's internal RAM offset (its own analogue of the `set_gap`/`offset_x` values from sections 2 and 4) via its driver-level rotation tables (`TFT_eSPI/TFT_Drivers/ST7789_Rotation.h`), not a numeric literal in this setup file: no separate `TFT_X_OFFSET`/`TFT_Y_OFFSET` macros are defined here, so the exact offset pixel count applied per rotation via `CGRAM_OFFSET` in this driver path is UNCONFIRMED from this file alone (would need to trace `ST7789_Rotation.h`, which the task didn't ask to open and this recon didn't).
+`T-Display-S3/lib/TFT_eSPI/User_Setups/Setup206_LilyGo_T_Display_S3.h` (48
+lines) declares `ST7789_DRIVER`, `CGRAM_OFFSET`, `TFT_RGB_ORDER TFT_RGB`,
+`TFT_INVERSION_ON`, `TFT_PARALLEL_8_BIT`, `TFT_WIDTH 170`, `TFT_HEIGHT 320`, and
+the same pins as `pin_config.h` **pin for pin**, which is the independent
+confirmation of section 1. This firmware uses LovyanGFX, not TFT_eSPI, so the
+rest of that file only matters if something switches libraries. `CGRAM_OFFSET`
+is TFT_eSPI's own analogue of the `offset_x` in sections 2 and 4; the exact
+pixel count it applies per rotation lives in `TFT_Drivers/ST7789_Rotation.h` and
+was never traced.
 
 ---
 
@@ -259,26 +248,14 @@ Corroborating build flag confirming native USB CDC is enabled by default: `-DARD
 
 ---
 
-## 8. Files touched during this recon (for reference)
-- `T-Display-S3/examples/factory/pin_config.h`
-- `T-Display-S3/examples/tft/pin_config.h` (diffed against factory)
-- `T-Display-S3/examples/factory/factory.ino`
-- `T-Display-S3/examples/tft/tft.ino`
-- `T-Display-S3/examples/T-Display-S3-Queue/ST7789_Handler.h`
-- `T-Display-S3/examples/T-Display-S3-{Piano,Piano-Debug,Gingoduino,BLE-Sender,BLE-Receiver,USB-Device}/*.h` (offset_x=35 grep hits only)
-- `T-Display-S3/platformio.ini`
-- `T-Display-S3/boards/lilygo-t-display-s3.json`
-- `T-Display-S3/lib/TFT_eSPI/User_Setups/Setup206_LilyGo_T_Display_S3.h`
-- `LovyanGFX/examples/HowToUse/2_user_setting/2_user_setting.ino`
-- `LovyanGFX/src/lgfx/v1/platforms/esp32s3/Bus_Parallel8.hpp`
-- `LovyanGFX/src/lgfx/v1/panel/Panel_Device.hpp`
-- `LovyanGFX/src/lgfx/v1/panel/Panel_ST7789.hpp`
-- `LovyanGFX/src/lgfx/boards.hpp` (grepped, no match)
-- `LovyanGFX/src/lgfx_user/Lilygo_T_Display_S3_AMOLED.hpp` (grep hit, confirmed different board/panel, not opened in full)
+## 8. What is still unconfirmed
 
-## 9. UNCONFIRMED items (explicit list)
-1. `default_16MB.csv` partition layout: filename confirmed at `boards/lilygo-t-display-s3.json:6`, contents not vendored in this clone.
-2. Exact pixel offset `CGRAM_OFFSET` applies per rotation in the TFT_eSPI path (`Setup206_LilyGo_T_Display_S3.h:9`): would require tracing `TFT_eSPI/TFT_Drivers/ST7789_Rotation.h`, not done.
-3. `Panel_ST7789`'s effective `memory_width` as used by the LILYGO LovyanGFX examples (170 vs base-class-default 240): `Panel_ST7789.hpp` constructor doesn't touch it and `Panel_LCD.hpp` (its parent) wasn't traced.
-4. Whether `0x1001` is confirmed as the literal runtime USB-CDC descriptor PID by the Arduino-ESP32 core: no local core install found to cross-check; only the board-json literal is confirmed.
-5. What PID the `usb_hid_pad` example (native USB HID mode, `ARDUINO_USB_MODE=0`) enumerates as: not present in any vendored file.
+Five items were flagged UNCONFIRMED by this recon and they live in
+`docs/open-questions.md` now, with the command that settles each: the contents
+of `default_16MB.csv` (H1), the TFT_eSPI `CGRAM_OFFSET` per rotation (moot, this
+firmware uses LovyanGFX directly), `Panel_ST7789`'s effective `memory_width` as
+used by the LILYGO example (H3, 170 vs the base-class default of 240, never
+traced through `Panel_LCD.hpp`), whether `0x1001` is the literal runtime CDC
+descriptor PID (H4, resolved on hardware: a real board reports `303a:1001`
+through `ioreg`), and what PID the `usb_hid_pad` env would enumerate as (moot,
+the shipping env stays in CDC mode).
